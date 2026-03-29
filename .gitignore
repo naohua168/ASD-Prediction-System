@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# Conda
+.env
+.conda/
+conda-env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 数据文件
+data/uploads/*
+data/results/*
+!data/uploads/.gitkeep
+!data/results/.gitkeep
+
+# 日志
+*.log
+logs/
+
+# 数据库
+*.db
+*.sqlite3
+
+# 缓存
+.cache/
+.mypy_cache/
+.pytest_cache/
+
+# 操作系统
+.DS_Store
+Thumbs.db
