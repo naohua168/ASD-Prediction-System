@@ -1,22 +1,55 @@
 import os
+from dotenv import load_dotenv
+from pathlib import Path  # ✅ 使用现代化路径处理
+
+load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent  # ✅ 统一路径基准
 
 
 class Config:
-    SECRET_KEY = os.environ.get('SECRET_KEY') or 'asd-prediction-secret-key-2024'
-    SQLALCHEMY_DATABASE_URI = 'mysql+pymysql://asd_user:SecurePass123!@localhost/asd_prediction'
-    SQLALCHEMY_TRACK_MODIFICATIONS = False
+    # ✅ 路径更简洁
+    UPLOAD_FOLDER = BASE_DIR / 'data' / 'uploads'
 
-    # 文件上传配置
-    UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data/uploads')
-    MAX_CONTENT_LENGTH = 500 * 1024 * 1024  # 500MB
+    # ✅ 添加文件扩展名限制
+    ALLOWED_EXTENSIONS = {'nii', 'nii.gz', 'img', 'hdr'}
 
-    # Celery配置
-    CELERY_BROKER_URL = 'redis://localhost:6379/0'
-    CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+    # ✅ 数据库连接池配置
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        'pool_size': 10,
+        'pool_recycle': 3600,
+        'pool_pre_ping': True
+    }
 
-    # 邮件配置（用于错误报告）
-    MAIL_SERVER = 'smtp.qq.com'
-    MAIL_PORT = 587
-    MAIL_USE_TLS = True
-    MAIL_USERNAME = 'bai_bai168@qq.com'
-    MAIL_PASSWORD = '你的QQ邮箱授权码'  # 需要在QQ邮箱设置中获取
+    # ✅ 完整的 Celery 配置
+    CELERY_TASK_SERIALIZER = 'json'
+    CELERY_TIMEZONE = 'Asia/Shanghai'
+
+    # ✅ 邮件配置增强
+    MAIL_MAX_EMAILS = 100
+    MAIL_ASCII_ATTACHMENTS = False
+
+
+# ✅ 多环境支持
+class DevelopmentConfig(Config):
+    DEBUG = True
+    WTF_CSRF_ENABLED = False
+
+
+class ProductionConfig(Config):
+    DEBUG = False
+    WTF_CSRF_ENABLED = True
+    # ✅ 生产环境强制检查 SECRET_KEY
+    if not os.getenv('SECRET_KEY'):
+        raise ValueError("生产环境必须设置 SECRET_KEY")
+
+
+class TestingConfig(Config):
+    TESTING = True
+    SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
+
+
+config = {
+    'development': DevelopmentConfig,
+    'production': ProductionConfig,
+    'testing': TestingConfig
+}
