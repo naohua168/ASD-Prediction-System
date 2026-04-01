@@ -1,4 +1,5 @@
 from app import create_app, db
+from flask_migrate import Migrate
 from dotenv import load_dotenv
 import os
 import sys
@@ -6,20 +7,20 @@ import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from config import ProductionConfig, DevelopmentConfig
+from config import ProductionConfig, DevelopmentConfig, config
 
 # 加载环境变量
 load_dotenv()
 
 # 根据环境变量选择配置
 env = os.getenv('FLASK_ENV', 'development')
-if env == 'production':
-    config_object = ProductionConfig
-else:
-    config_object = DevelopmentConfig
+config_class = config.get(env, DevelopmentConfig)
 
 # 创建应用实例
-app = create_app(config_object)
+app = create_app(config_class)
+
+# 初始化数据库迁移
+migrate = Migrate(app, db)
 
 # ✅ 延迟导入 models（在应用创建后）
 with app.app_context():
@@ -122,7 +123,7 @@ if __name__ == '__main__':
     # 获取服务器配置
     host = os.getenv('SERVER_HOST', '0.0.0.0')
     port = int(os.getenv('SERVER_PORT', 5000))
-    debug = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
+    debug = os.getenv('FLASK_DEBUG', '1' if env == 'development' else '0').lower() in ('1', 'true', 'yes')
 
     app.logger.info(f'服务器启动：http://{host}:{port}')
 
