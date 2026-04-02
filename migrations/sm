@@ -1,0 +1,8 @@
+
+users - 用户表
+patients - 患者表
+mri_scans - MRI 扫描表
+analysis_results - 分析结果表
+clinical_scores - 临床评分表
+system_logs - 系统日志表
+alembic_version - 迁移版本表

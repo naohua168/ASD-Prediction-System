@@ -1,13 +1,14 @@
-from app import create_app, db
-from flask_migrate import Migrate
-from dotenv import load_dotenv
+import logging
 import os
 import sys
-import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from config import ProductionConfig, DevelopmentConfig, config
+from dotenv import load_dotenv
+from flask_migrate import Migrate
+
+from app import create_app, db
+from config import DevelopmentConfig, config
 
 # 加载环境变量
 load_dotenv()
@@ -22,19 +23,19 @@ app = create_app(config_class)
 # 初始化数据库迁移
 migrate = Migrate(app, db)
 
-# ✅ 延迟导入 models（在应用创建后）
-with app.app_context():
-    from app.models import User, Patient, Analysis
-
 
 @app.shell_context_processor
 def make_shell_context():
     """添加 shell 上下文"""
+    from app.models import User, Patient, MRIScan, AnalysisResult, ClinicalScore, SystemLog
     return {
         'db': db,
         'User': User,
         'Patient': Patient,
-        'Analysis': Analysis,
+        'MRIScan': MRIScan,
+        'AnalysisResult': AnalysisResult,
+        'ClinicalScore': ClinicalScore,
+        'SystemLog': SystemLog,
         'app': app
     }
 
@@ -95,11 +96,13 @@ def initialize_app(app):
             admin_password = os.getenv('ADMIN_PASSWORD', 'admin123')
             admin_email = os.getenv('ADMIN_EMAIL', 'admin@asd-system.com')
 
+            from app.models import User
+
             if not User.query.filter_by(username=admin_username).first():
                 admin = User(
                     username=admin_username,
                     email=admin_email,
-                    role='admin'
+                    role='doctor'
                 )
                 admin.set_password(admin_password)
                 db.session.add(admin)
@@ -111,6 +114,50 @@ def initialize_app(app):
         except Exception as e:
             app.logger.error(f'应用初始化失败：{e}', exc_info=True)
             sys.exit(1)
+
+
+@app.cli.command("sync-export")
+def sync_export():
+    """导出数据库同步包"""
+    from data_sync.sync_tool import main
+    main(['export', '--package'])
+
+
+@app.cli.command("sync-import")
+def sync_import():
+    """导入数据库同步包"""
+    from data_sync.sync_tool import main
+    main(['import'])
+
+
+@app.cli.command("export-db")
+def export_db_command():
+    """导出数据库数据"""
+    from scripts.export_data import export_database
+    if export_database():
+        print("数据库导出成功！")
+    else:
+        print("数据库导出失败！")
+
+
+@app.cli.command("import-db")
+def import_db_command():
+    """导入数据库数据"""
+    from scripts.import_data import import_database
+    if import_database():
+        print("数据库导入成功！")
+    else:
+        print("数据库导入失败！")
+
+
+@app.cli.command("verify-db")
+def verify_db_command():
+    """验证数据库状态"""
+    from scripts.verify_db import verify_database
+    if verify_database():
+        print("数据库验证成功！")
+    else:
+        print("数据库验证失败！")
 
 
 if __name__ == '__main__':
