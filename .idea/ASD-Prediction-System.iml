@@ -6,6 +6,9 @@
       <excludeFolder url="file://$MODULE_DIR$/data/uploads/ABIDEII-OHSU" />
       <excludeFolder url="file://$MODULE_DIR$/data/uploads/ABIDEII-SU" />
       <excludeFolder url="file://$MODULE_DIR$/data/uploads/ABIDEII-UCLA" />
+      <excludeFolder url="file://$MODULE_DIR$/.idea/dataSources" />
+      <excludeFolder url="file://$MODULE_DIR$/data/cache" />
+      <excludeFolder url="file://$MODULE_DIR$/logs" />
     </content>
     <orderEntry type="jdk" jdkName="C:\Users\bai_b\.conda\envs\zb" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
