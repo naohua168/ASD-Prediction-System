@@ -1,9 +1,11 @@
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
+from flask_login import LoginManager
 
 db = SQLAlchemy()
 migrate = Migrate()
+login_manager = LoginManager()
 
 
 def create_app(config_class=None):
@@ -20,6 +22,11 @@ def create_app(config_class=None):
     # 初始化扩展
     db.init_app(app)
     migrate.init_app(app, db)
+    login_manager.init_app(app)
+
+    # 配置登录
+    login_manager.login_view = 'auth.login'
+    login_manager.login_message = '请先登录以访问此页面'
 
     # 注册蓝图
     try:
