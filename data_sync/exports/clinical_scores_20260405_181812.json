@@ -12,7 +12,7 @@
     {
       "Field": "patient_id",
       "Type": "int",
-      "Null": "NO",
+      "Null": "YES",
       "Key": "MUL",
       "Default": null,
       "Extra": ""
@@ -62,11 +62,11 @@
       "Type": "datetime",
       "Null": "YES",
       "Key": "",
-      "Default": "CURRENT_TIMESTAMP",
-      "Extra": "DEFAULT_GENERATED"
+      "Default": null,
+      "Extra": ""
     }
   ],
   "data": [],
-  "checksum": "unknown",
-  "exported_at": "2026-04-05T17:09:09.371208"
+  "checksum": "0_0",
+  "exported_at": "2026-04-05T18:18:12.751911"
 }

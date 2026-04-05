@@ -1,5 +1,5 @@
 {
-  "created_at": "2026-04-05T18:06:40.030604",
+  "created_at": "2026-04-05T18:18:12.758397",
   "tables": [
     "users",
     "patients",
@@ -9,11 +9,11 @@
     "system_logs"
   ],
   "files": {
-    "users": "D:\\cxdownload\\ASD-Prediction-System\\data_sync\\exports\\users_20260405_180639.json",
-    "patients": "D:\\cxdownload\\ASD-Prediction-System\\data_sync\\exports\\patients_20260405_180639.json",
-    "mri_scans": "D:\\cxdownload\\ASD-Prediction-System\\data_sync\\exports\\mri_scans_20260405_180639.json",
-    "analysis_results": "D:\\cxdownload\\ASD-Prediction-System\\data_sync\\exports\\analysis_results_20260405_180639.json",
-    "clinical_scores": "D:\\cxdownload\\ASD-Prediction-System\\data_sync\\exports\\clinical_scores_20260405_180640.json",
-    "system_logs": "D:\\cxdownload\\ASD-Prediction-System\\data_sync\\exports\\system_logs_20260405_180640.json"
+    "users": "data_sync/exports/users_20260405_181812.json",
+    "patients": "data_sync/exports/patients_20260405_181812.json",
+    "mri_scans": "data_sync/exports/mri_scans_20260405_181812.json",
+    "analysis_results": "data_sync/exports/analysis_results_20260405_181812.json",
+    "clinical_scores": "data_sync/exports/clinical_scores_20260405_181812.json",
+    "system_logs": "data_sync/exports/system_logs_20260405_181812.json"
   }
 }

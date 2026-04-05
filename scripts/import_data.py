@@ -153,12 +153,19 @@ class DataImporter:
             # 添加剩余的表
             ordered_tables.extend(remaining_tables)
 
-            # 按顺序导入所有表
+                       # 按顺序导入所有表
             for table in ordered_tables:
                 filepath = manifest['files'][table]
+                # 如果是绝对路径但文件不存在，尝试转换为相对路径
                 if not Path(filepath).exists():
-                    log_message(f"文件不存在: {filepath}", "WARNING")
-                    continue
+                    # 提取文件名，构建相对路径
+                    filename = Path(filepath).name
+                    relative_path = Path("data_sync/exports") / filename
+                    if relative_path.exists():
+                        filepath = str(relative_path)
+                    else:
+                        log_message(f"文件不存在: {filepath}", "WARNING")
+                        continue
 
                 if not self.import_table(filepath):
                     log_message(f"导入表 {table} 失败", "ERROR")
