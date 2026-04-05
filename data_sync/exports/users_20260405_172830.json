@@ -1,5 +1,5 @@
 {
-  "table_name": "analysis_results",
+  "table_name": "users",
   "schema": [
     {
       "Field": "id",
@@ -10,74 +10,58 @@
       "Extra": "auto_increment"
     },
     {
-      "Field": "patient_id",
-      "Type": "int",
+      "Field": "username",
+      "Type": "varchar(64)",
       "Null": "YES",
-      "Key": "MUL",
+      "Key": "UNI",
       "Default": null,
       "Extra": ""
     },
     {
-      "Field": "mri_scan_id",
-      "Type": "int",
+      "Field": "email",
+      "Type": "varchar(120)",
       "Null": "YES",
-      "Key": "MUL",
+      "Key": "UNI",
       "Default": null,
       "Extra": ""
     },
     {
-      "Field": "prediction",
-      "Type": "varchar(20)",
+      "Field": "password_hash",
+      "Type": "varchar(128)",
       "Null": "YES",
       "Key": "",
       "Default": null,
       "Extra": ""
     },
     {
-      "Field": "probability",
-      "Type": "float",
+      "Field": "role",
+      "Type": "enum('doctor','researcher')",
       "Null": "YES",
       "Key": "",
       "Default": null,
       "Extra": ""
     },
     {
-      "Field": "confidence",
-      "Type": "float",
+      "Field": "is_active",
+      "Type": "tinyint(1)",
       "Null": "YES",
       "Key": "",
       "Default": null,
       "Extra": ""
     },
     {
-      "Field": "model_version",
-      "Type": "varchar(50)",
+      "Field": "hospital",
+      "Type": "varchar(100)",
       "Null": "YES",
       "Key": "",
       "Default": null,
       "Extra": ""
     },
     {
-      "Field": "features_used",
-      "Type": "text",
+      "Field": "department",
+      "Type": "varchar(100)",
       "Null": "YES",
       "Key": "",
-      "Default": null,
-      "Extra": ""
-    },
-    {
-      "Field": "metrics",
-      "Type": "text",
-      "Null": "YES",
-      "Key": "",
-      "Default": null,
-      "Extra": ""
-    },
-    {
-      "Field": "analyzed_by",
-      "Type": "int",
-      "Null": "YES",
-      "Key": "MUL",
       "Default": null,
       "Extra": ""
     },
@@ -88,9 +72,24 @@
       "Key": "",
       "Default": null,
       "Extra": ""
+    },
+    {
+      "Field": "updated_at",
+      "Type": "datetime",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
     }
   ],
-  "data": [],
-  "checksum": "unknown",
-  "exported_at": "2026-04-04T15:45:34.257109"
-}
+  "data": [
+    {
+      "id": 1,
+      "username": "admin",
+      "email": "admin@asd-system.com",
+      "password_hash": "pbkdf2:sha256:150000$Qeb59aiD$99a40e1e38ef19a08317397c435268b247ad4551dafe9049d160dc925aa1021d",
+      "role": "doctor",
+      "is_active": 1,
+      "hospital": null,
+      "department": null,
+      "created_at": 

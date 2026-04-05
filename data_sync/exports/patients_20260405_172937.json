@@ -1,5 +1,5 @@
 {
-  "table_name": "analysis_results",
+  "table_name": "patients",
   "schema": [
     {
       "Field": "id",
@@ -11,54 +11,62 @@
     },
     {
       "Field": "patient_id",
-      "Type": "int",
-      "Null": "YES",
-      "Key": "MUL",
-      "Default": null,
-      "Extra": ""
-    },
-    {
-      "Field": "mri_scan_id",
-      "Type": "int",
-      "Null": "YES",
-      "Key": "MUL",
-      "Default": null,
-      "Extra": ""
-    },
-    {
-      "Field": "prediction",
-      "Type": "varchar(20)",
-      "Null": "YES",
-      "Key": "",
-      "Default": null,
-      "Extra": ""
-    },
-    {
-      "Field": "probability",
-      "Type": "float",
-      "Null": "YES",
-      "Key": "",
-      "Default": null,
-      "Extra": ""
-    },
-    {
-      "Field": "confidence",
-      "Type": "float",
-      "Null": "YES",
-      "Key": "",
-      "Default": null,
-      "Extra": ""
-    },
-    {
-      "Field": "model_version",
       "Type": "varchar(50)",
       "Null": "YES",
+      "Key": "UNI",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "name",
+      "Type": "varchar(100)",
+      "Null": "YES",
       "Key": "",
       "Default": null,
       "Extra": ""
     },
     {
-      "Field": "features_used",
+      "Field": "age",
+      "Type": "int",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "gender",
+      "Type": "enum('male','female','other')",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "full_scale_iq",
+      "Type": "int",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "ados_g_score",
+      "Type": "float",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "adi_r_score",
+      "Type": "float",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "family_history",
       "Type": "text",
       "Null": "YES",
       "Key": "",
@@ -66,7 +74,7 @@
       "Extra": ""
     },
     {
-      "Field": "metrics",
+      "Field": "notes",
       "Type": "text",
       "Null": "YES",
       "Key": "",
@@ -74,7 +82,7 @@
       "Extra": ""
     },
     {
-      "Field": "analyzed_by",
+      "Field": "doctor_id",
       "Type": "int",
       "Null": "YES",
       "Key": "MUL",
@@ -88,9 +96,17 @@
       "Key": "",
       "Default": null,
       "Extra": ""
+    },
+    {
+      "Field": "updated_at",
+      "Type": "datetime",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
     }
   ],
   "data": [],
-  "checksum": "unknown",
-  "exported_at": "2026-04-04T16:10:24.529235"
+  "checksum": "0_0",
+  "exported_at": "2026-04-05T17:29:37.992972"
 }

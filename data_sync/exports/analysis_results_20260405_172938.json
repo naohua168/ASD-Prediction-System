@@ -1,5 +1,5 @@
 {
-  "table_name": "clinical_scores",
+  "table_name": "analysis_results",
   "schema": [
     {
       "Field": "id",
@@ -18,7 +18,7 @@
       "Extra": ""
     },
     {
-      "Field": "user_id",
+      "Field": "mri_scan_id",
       "Type": "int",
       "Null": "YES",
       "Key": "MUL",
@@ -26,15 +26,15 @@
       "Extra": ""
     },
     {
-      "Field": "score_type",
-      "Type": "varchar(50)",
+      "Field": "prediction",
+      "Type": "varchar(20)",
       "Null": "YES",
       "Key": "",
       "Default": null,
       "Extra": ""
     },
     {
-      "Field": "score_value",
+      "Field": "probability",
       "Type": "float",
       "Null": "YES",
       "Key": "",
@@ -42,18 +42,42 @@
       "Extra": ""
     },
     {
-      "Field": "assessment_date",
-      "Type": "datetime",
+      "Field": "confidence",
+      "Type": "float",
       "Null": "YES",
       "Key": "",
       "Default": null,
       "Extra": ""
     },
     {
-      "Field": "notes",
+      "Field": "model_version",
+      "Type": "varchar(50)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "features_used",
       "Type": "text",
       "Null": "YES",
       "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "metrics",
+      "Type": "text",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "analyzed_by",
+      "Type": "int",
+      "Null": "YES",
+      "Key": "MUL",
       "Default": null,
       "Extra": ""
     },
@@ -67,6 +91,6 @@
     }
   ],
   "data": [],
-  "checksum": "unknown",
-  "exported_at": "2026-04-04T16:10:24.498002"
+  "checksum": "0_0",
+  "exported_at": "2026-04-05T17:29:38.027509"
 }

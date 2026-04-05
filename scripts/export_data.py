@@ -11,9 +11,19 @@ import json
 import argparse
 import pymysql
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, date
 from data_sync.config import config
 from data_sync.utils import log_message, generate_sync_filename, format_size
+
+
+class DateTimeEncoder(json.JSONEncoder):
+    """自定义JSON编码器，处理datetime和date类型"""
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        elif isinstance(obj, date):
+            return obj.isoformat()
+        return super().default(obj)
 
 
 class DataExporter:
@@ -40,17 +50,31 @@ class DataExporter:
             return None
 
     def get_table_checksum(self, table_name, conn):
-        """计算表数据的校验和 (PyMySQL兼容)"""
+        """计算表数据的校验和 (兼容没有updated_at字段的表)"""
         try:
             with conn.cursor() as cursor:
-                # 获取行数和最后更新时间
-                cursor.execute(f"SELECT COUNT(*) AS row_count, MAX(updated_at) AS last_updated FROM {table_name}")
+                # 首先检查表是否有updated_at字段
+                cursor.execute(f"DESCRIBE {table_name}")
+                columns = [row['Field'] for row in cursor.fetchall()]
+
+                if 'updated_at' in columns:
+                    cursor.execute(f"SELECT COUNT(*) AS row_count, MAX(updated_at) AS last_updated FROM {table_name}")
+                else:
+                    cursor.execute(f"SELECT COUNT(*) AS row_count, NULL AS last_updated FROM {table_name}")
+
                 result = cursor.fetchone()
                 row_count = result['row_count']
                 last_updated = result['last_updated']
 
-                # 计算校验和
-                return f"{row_count}_{last_updated.timestamp() if last_updated else 0}"
+                # 处理last_updated
+                if last_updated is None:
+                    timestamp = 0
+                elif hasattr(last_updated, 'timestamp'):
+                    timestamp = last_updated.timestamp()
+                else:
+                    timestamp = 0
+
+                return f"{row_count}_{timestamp}"
         except pymysql.Error as err:
             log_message(f"获取表校验和失败: {err}", "ERROR")
             return "unknown"
@@ -114,7 +138,7 @@ class DataExporter:
             filepath = config.EXPORT_DIR / filename
 
             with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(export_data, f, indent=2, ensure_ascii=False)
+                json.dump(export_data, f, indent=2, ensure_ascii=False, cls=DateTimeEncoder)
 
             file_size = os.path.getsize(filepath)
             log_message(f"表 {table_name} 导出成功: {total_rows} 行, 文件大小: {format_size(file_size)}")

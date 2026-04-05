@@ -1,5 +1,5 @@
 {
-  "table_name": "mri_scans",
+  "table_name": "clinical_scores",
   "schema": [
     {
       "Field": "id",
@@ -18,40 +18,32 @@
       "Extra": ""
     },
     {
-      "Field": "scan_date",
-      "Type": "datetime",
-      "Null": "YES",
-      "Key": "",
-      "Default": null,
-      "Extra": ""
-    },
-    {
-      "Field": "file_path",
-      "Type": "varchar(255)",
-      "Null": "YES",
-      "Key": "",
-      "Default": null,
-      "Extra": ""
-    },
-    {
-      "Field": "original_filename",
-      "Type": "varchar(255)",
-      "Null": "YES",
-      "Key": "",
-      "Default": null,
-      "Extra": ""
-    },
-    {
-      "Field": "file_size",
+      "Field": "user_id",
       "Type": "int",
       "Null": "YES",
+      "Key": "MUL",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "score_type",
+      "Type": "varchar(50)",
+      "Null": "YES",
       "Key": "",
       "Default": null,
       "Extra": ""
     },
     {
-      "Field": "scan_type",
-      "Type": "varchar(50)",
+      "Field": "score_value",
+      "Type": "float",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "assessment_date",
+      "Type": "datetime",
       "Null": "YES",
       "Key": "",
       "Default": null,
@@ -66,14 +58,6 @@
       "Extra": ""
     },
     {
-      "Field": "uploaded_by",
-      "Type": "int",
-      "Null": "YES",
-      "Key": "MUL",
-      "Default": null,
-      "Extra": ""
-    },
-    {
       "Field": "created_at",
       "Type": "datetime",
       "Null": "YES",
@@ -83,6 +67,6 @@
     }
   ],
   "data": [],
-  "checksum": "unknown",
-  "exported_at": "2026-04-04T15:45:34.303587"
+  "checksum": "0_0",
+  "exported_at": "2026-04-05T17:29:38.032013"
 }
