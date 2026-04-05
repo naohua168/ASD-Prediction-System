@@ -142,7 +142,8 @@ class DataExporter:
 
             file_size = os.path.getsize(filepath)
             log_message(f"表 {table_name} 导出成功: {total_rows} 行, 文件大小: {format_size(file_size)}")
-            return str(filepath)
+            # 返回相对路径（相对于项目根目录）
+            return f"data_sync/exports/{filename}"
         finally:
             conn.close()
 

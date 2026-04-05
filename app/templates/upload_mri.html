@@ -1,0 +1,245 @@
+<!-- 文件路径: E:\自闭症\ASD-Prediction-System\app\templates\upload_mri.html -->
+{% extends "base.html" %}
+
+{% block title %}上传MRI - ASD预测系统{% endblock %}
+
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+<style>
+    .upload-container {
+        max-width: 800px;
+        margin: 0 auto;
+    }
+    .upload-zone-large {
+        border: 3px dashed #d1d5db;
+        border-radius: 16px;
+        padding: 60px 40px;
+        text-align: center;
+        background: linear-gradient(135deg, #f9fafb 0%, #ffffff 100%);
+        cursor: pointer;
+        transition: all 0.3s;
+        margin-bottom: 30px;
+    }
+    .upload-zone-large:hover,
+    .upload-zone-large.dragover {
+        border-color: #2563eb;
+        background: linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%);
+        transform: scale(1.02);
+    }
+    .upload-icon-large {
+        font-size: 72px;
+        color: #2563eb;
+        margin-bottom: 20px;
+    }
+    .file-info {
+        background: #f9fafb;
+        padding: 20px;
+        border-radius: 12px;
+        margin-top: 20px;
+        display: none;
+    }
+    .file-info.show {
+        display: block;
+        animation: slideIn 0.3s ease;
+    }
+    @keyframes slideIn {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="dashboard-container upload-container">
+    <div class="panel">
+        <div class="panel-header">
+            <h3 class="panel-title">📤 上传MRI扫描文件</h3>
+            {% if request.args.get('patient_id') %}
+            <a href="{{ url_for('main.patient_detail', id=request.args.get('patient_id')) }}" class="brain-btn" style="background: #6b7280;">
+                返回
+            </a>
+            {% else %}
+            <a href="{{ url_for('main.patients') }}" class="brain-btn" style="background: #6b7280;">
+                返回
+            </a>
+            {% endif %}
+        </div>
+
+        <form method="POST" enctype="multipart/form-data" id="uploadForm">
+            {{ form.hidden_tag() }}
+
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 8px; font-weight: 600;">选择患者 *</label>
+                <select name="patient_id" required
+                        style="width: 100%; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; font-size: 14px;">
+                    <option value="">-- 请选择患者 --</option>
+                    {% for patient in patients %}
+                    <option value="{{ patient.id }}" {% if request.args.get('patient_id')|int == patient.id %}selected{% endif %}>
+                        {{ patient.name }} ({{ patient.patient_id }})
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 8px; font-weight: 600;">扫描类型</label>
+                {{ form.scan_type(class="form-control", style="width: 100%; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px;") }}
+            </div>
+
+            <div class="upload-zone-large" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+                <div class="upload-icon-large">🧠</div>
+                <h3 style="margin-bottom: 10px; color: #1f2937;">拖拽或点击上传 NIfTI 文件</h3>
+                <p style="color: #6b7280; margin-bottom: 15px;">支持格式: .nii, .nii.gz</p>
+                <p style="color: #9ca3af; font-size: 13px;">最大文件大小: 500MB</p>
+                <input type="file" id="fileInput" name="file" accept=".nii,.nii.gz" style="display: none;"
+                       onchange="handleFileSelect(this.files[0])" required>
+            </div>
+
+            <div id="fileInfo" class="file-info">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <p style="margin: 0 0 5px 0; font-weight: 600;" id="fileName"></p>
+                        <p style="margin: 0; color: #6b7280; font-size: 13px;" id="fileSize"></p>
+                    </div>
+                    <button type="button" class="brain-btn" style="background: #ef4444;" onclick="clearFile()">
+                        <i class="fas fa-trash"></i> 清除
+                    </button>
+                </div>
+            </div>
+
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 8px; font-weight: 600;">备注（可选）</label>
+                {{ form.notes(class="form-control", rows=3, style="width: 100%; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; resize: vertical;") }}
+            </div>
+
+            <div id="uploadProgress" style="display: none; margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="font-weight: 600;">上传进度</span>
+                    <span id="progressText" style="color: #2563eb; font-weight: 600;">0%</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <button type="submit" class="brain-btn" style="width: 100%; padding: 15px; font-size: 16px;" id="submitBtn">
+                <i class="fas fa-upload"></i> 开始上传
+            </button>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let selectedFile = null;
+
+const uploadZone = document.getElementById('uploadZone');
+
+['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+    uploadZone.addEventListener(eventName, preventDefaults, false);
+});
+
+function preventDefaults(e) {
+    e.preventDefault();
+    e.stopPropagation();
+}
+
+['dragenter', 'dragover'].forEach(eventName => {
+    uploadZone.addEventListener(eventName, () => uploadZone.classList.add('dragover'), false);
+});
+
+['dragleave', 'drop'].forEach(eventName => {
+    uploadZone.addEventListener(eventName, () => uploadZone.classList.remove('dragover'), false);
+});
+
+uploadZone.addEventListener('drop', (e) => {
+    const dt = e.dataTransfer;
+    if (dt.files.length > 0) {
+        handleFileSelect(dt.files[0]);
+    }
+});
+
+function handleFileSelect(file) {
+    if (!file) return;
+
+    if (!file.name.endsWith('.nii') && !file.name.endsWith('.nii.gz')) {
+        alert('请上传 .nii 或 .nii.gz 格式的MRI文件');
+        return;
+    }
+
+    selectedFile = file;
+    document.getElementById('fileName').textContent = file.name;
+    document.getElementById('fileSize').textContent = formatFileSize(file.size);
+    document.getElementById('fileInfo').classList.add('show');
+}
+
+function clearFile() {
+    selectedFile = null;
+    document.getElementById('fileInput').value = '';
+    document.getElementById('fileInfo').classList.remove('show');
+}
+
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+
+    if (!selectedFile) {
+        alert('请先选择文件');
+        return;
+    }
+
+    const formData = new FormData(this);
+    const progressDiv = document.getElementById('uploadProgress');
+    const progressFill = document.getElementById('progressFill');
+    const progressText = document.getElementById('progressText');
+    const submitBtn = document.getElementById('submitBtn');
+
+    progressDiv.style.display = 'block';
+    submitBtn.disabled = true;
+    submitBtn.textContent = '上传中...';
+
+    const xhr = new XMLHttpRequest();
+
+    xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+            const percent = Math.round((e.loaded / e.total) * 100);
+            progressFill.style.width = percent + '%';
+            progressText.textContent = percent + '%';
+        }
+    });
+
+    xhr.addEventListener('load', () => {
+        if (xhr.status === 200) {
+            alert('文件上传成功！');
+            const patientId = '{{ request.args.get("patient_id", "") }}';
+            if (patientId) {
+                window.location.href = '{{ url_for("main.patient_detail", id=0) }}'.replace('0', patientId);
+            } else {
+                window.location.href = '{{ url_for("main.patients") }}';
+            }
+        } else {
+            alert('上传失败: ' + xhr.statusText);
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-upload"></i> 开始上传';
+        }
+    });
+
+    xhr.addEventListener('error', () => {
+        alert('网络错误，请重试');
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fas fa-upload"></i> 开始上传';
+    });
+
+    xhr.open('POST', '{{ url_for("main.upload_mri_general") }}');
+    xhr.send(formData);
+});
+</script>
+{% endblock %}
