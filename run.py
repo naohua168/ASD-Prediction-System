@@ -205,7 +205,7 @@ def export_db_command():
 @app.cli.command("import-db")
 def import_db_command():
     """
-    Flask CLI 命令：导入数据库数据（简化版）
+    Flask CLI 命令：导入数据库数据
 
     使用 scripts/import_data 模块从导出的 JSON 文件导入数据到本地数据库。
     支持增量同步和全量导入，会自动处理外键约束。

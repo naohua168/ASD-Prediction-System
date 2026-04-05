@@ -23,7 +23,7 @@ def upgrade():
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('username', sa.String(length=64), nullable=True),
     sa.Column('email', sa.String(length=120), nullable=True),
-    sa.Column('password_hash', sa.String(length=128), nullable=True),
+    sa.Column('password_hash', sa.String(length=256), nullable=True),
     sa.Column('role', sa.Enum('doctor', 'researcher'), nullable=True),
     sa.Column('is_active', sa.Boolean(), nullable=True),
     sa.Column('hospital', sa.String(length=100), nullable=True),
