@@ -6,20 +6,86 @@ ASD预测服务 - 统一封装多个模型的预测逻辑
 2. 使用 prepare_data_wrapper.py 提取脑区特征
 3. 执行预测并返回结果
 4. 计算各脑区对预测的贡献度
+5. 支持模型训练和注册
 """
 
 import os
 import sys
 import numpy as np
-from typing import Dict, Optional
+import joblib
+from typing import Dict, Optional, List
+from datetime import datetime
+from pathlib import Path
 
-# 添加项目根目录到路径
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
+# ... existing code ...
 
 from ml_core.model_registry import ModelRegistry
-from ml_core.prepare_data_wrapper import loadFileList2DData
+from ml_core.prepare_data_wrapper import loadFileList2DData, loadMask
+
+
+class AAL3Atlas:
+    """AAL3 脑图谱 - 提供脑区编号到名称的映射"""
+
+    def __init__(self):
+        """初始化脑图谱，加载 AAL3v1 脑区名称"""
+        self.region_names = {}
+        self._load_aal3_atlas()
+
+    def _load_aal3_atlas(self):
+        """加载 AAL3v1 脑区名称映射"""
+        aal3_file = os.path.join(
+            os.path.dirname(__file__),
+            'data', 'Mask', 'ROI', 'AAL3v1_1mm.nii.txt'
+        )
+
+        if not os.path.exists(aal3_file):
+            print(f"⚠️ AAL3 文件不存在: {aal3_file}，使用默认命名")
+            return
+
+        try:
+            with open(aal3_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        try:
+                            region_id = int(parts[0])
+                            region_name = parts[1]
+                            self.region_names[region_id] = region_name
+                        except (ValueError, IndexError):
+                            continue
+
+            print(f"✅ 加载 AAL3 脑图谱: {len(self.region_names)} 个脑区")
+
+        except Exception as e:
+            print(f"⚠️ 加载 AAL3 脑图谱失败: {e}")
+
+    def get_region_name(self, region_id: int) -> str:
+        """
+        获取脑区名称
+
+        Args:
+            region_id: 脑区编号（1-based）
+
+        Returns:
+            脑区名称，如果不存在则返回 'Region_{id}'
+        """
+        return self.region_names.get(region_id, f"Region_{region_id}")
+
+    def get_all_region_names(self, n_regions: int) -> List[str]:
+        """
+        获取前 N 个脑区的名称列表
+
+        Args:
+            n_regions: 脑区数量
+
+        Returns:
+            脑区名称列表
+        """
+        return [self.get_region_name(i + 1) for i in range(n_regions)]
 
 
 class ASDPredictionService:
@@ -29,184 +95,428 @@ class ASDPredictionService:
         self.current_model = None
         self.current_model_id = None
         self.model_metadata = None
+        self.aal3_atlas = AAL3Atlas()
+        self.mask = None
+        self.brain_regions = None
+        self.feature_names = None
+        self.is_trained = False
+        self.training_metrics = None
 
-    def list_available_models(self) -> list:
-        """
-        获取所有可用模型列表（供前端下拉框使用）
+    # ... existing code ...
 
-        Returns:
-            模型信息列表
+    def load_brain_mask(self, mask_path=None):
         """
-        return self.registry.list_models()
-
-    def select_model(self, model_id: str):
-        """
-        选择要使用的模型
+        加载脑区掩膜
 
         Args:
-            model_id: 模型ID，如 'MinMaxScaler+PCA+SVM_Optuna_fold5_iter1'
+            mask_path: 掩膜文件路径，默认使用 AAL3 ROI 掩膜
 
-        Raises:
-            ValueError: 模型不存在
+        Returns:
+            掩膜数据或 None
+        """
+        if mask_path is None:
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            mask_path = os.path.join(project_root, 'ml_core', 'data', 'Mask', 'ROI', 'rAAL3v1.nii')
+
+        if not os.path.exists(mask_path):
+            print(f"⚠️ 掩膜文件不存在: {mask_path}")
+            return None
+
+        try:
+            self.mask = loadMask(mask_path)
+
+            if self.mask is not None:
+                unique_regions = np.unique(self.mask[self.mask > 0])
+                self.brain_regions = {int(r): self.aal3_atlas.get_region_name(int(r)) for r in unique_regions}
+                print(f"✅ 成功加载掩膜，包含 {len(unique_regions)} 个脑区")
+
+            return self.mask
+        except Exception as e:
+            print(f"❌ 加载掩膜失败: {e}")
+            return None
+
+    def extract_features_from_mri(self, mri_file_path, use_region_median=True, mask_path=None):
+        """
+        从 MRI 文件提取特征（兼容 classifier.py 接口）
+
+        Args:
+            mri_file_path: MRI 文件路径
+            use_region_median: 是否使用脑区中值作为特征
+            mask_path: 可选的自定义掩膜路径
+
+        Returns:
+            dict: 包含特征向量和脑区信息的字典
         """
         try:
-            model_data = self.registry.load_model(model_id)
-            self.current_model = model_data['model']
-            self.current_model_id = model_id
-            self.model_metadata = model_data
-            print(f"✅ 已选择模型: {model_id}")
-        except Exception as e:
-            raise ValueError(f"模型选择失败: {e}")
+            if not os.path.exists(mri_file_path):
+                raise FileNotFoundError(f"MRI 文件不存在: {mri_file_path}")
 
-    def predict_from_mri(self, mri_file_path: str) -> Dict:
-        """
-        从 MRI 文件进行预测（核心方法）
+            if self.mask is None:
+                self.load_brain_mask(mask_path)
 
-        流程：
-        1. 检查是否已选择模型
-        2. 验证文件是否存在
-        3. 加载 NIfTI 文件
-        4. 应用脑区掩膜提取特征（与训练时一致）
-        5. 使用选中的模型进行预测
-        6. 返回预测结果 + 置信度 + 脑区贡献度
+            load_mode = 1 if use_region_median else 0
+            features = loadFileList2DData([mri_file_path], self.mask, suffer=0, load=load_mode)
 
-        Args:
-            mri_file_path: 用户上传的 MRI 文件路径（.nii 或 .nii.gz）
+            if self.brain_regions:
+                self.feature_names = list(self.brain_regions.values())
+            else:
+                self.feature_names = [f"voxel_{i}" for i in range(features.shape[1])]
 
-        Returns:
-            {
-                'prediction': 'ASD' or 'NC',
-                'probability': 0.87,
-                'confidence': 0.92,
-                'model_used': 'MinMaxScaler+PCA+SVM',
-                'brain_region_contributions': {
-                    'Region_1': 0.15,
-                    'Region_2': -0.08,
-                    ...
-                }
+            print(f"✅ 成功提取特征，形状: {features.shape}")
+
+            region_values = self._extract_region_values(mri_file_path) if use_region_median else None
+
+            return {
+                'features': features,
+                'feature_names': self.feature_names,
+                'brain_regions': self.brain_regions,
+                'region_values': region_values
             }
 
-        Raises:
-            ValueError: 未选择模型或文件不存在
-            Exception: 预测过程出错
-        """
-        # 步骤1: 检查模型
-        if self.current_model is None:
-            raise ValueError("请先选择一个模型（调用 select_model 方法）")
+        except Exception as e:
+            print(f"❌ 特征提取失败: {e}")
+            raise
 
-        # 步骤2: 验证文件
-        if not os.path.exists(mri_file_path):
-            raise FileNotFoundError(f"MRI 文件不存在: {mri_file_path}")
-
+    def _extract_region_values(self, mri_file_path):
+        """提取各脑区的灰质体积值"""
         try:
-            # 步骤3: 提取特征（使用与训练时相同的逻辑）
-            mask_path = self.model_metadata.get('mask_path', '../data/Mask/ROI/reg1.nii')
+            import nibabel as nib
 
-            # 处理相对路径
-            if not os.path.isabs(mask_path):
-                mask_path = os.path.join(project_root, mask_path)
+            img = nib.load(mri_file_path)
+            img_data = img.get_fdata()
 
-            print(f"🔍 正在提取特征...")
-            print(f"   MRI 文件: {mri_file_path}")
-            print(f"   掩膜文件: {mask_path}")
+            region_stats = {}
+            if self.mask is not None:
+                unique_regions = np.unique(self.mask[self.mask > 0])
+                for region_id in unique_regions:
+                    region_mask = (self.mask == region_id)
+                    region_values = img_data[region_mask]
+                    region_name = self.aal3_atlas.get_region_name(int(region_id))
+                    region_stats[region_name] = {
+                        'mean': float(np.mean(region_values)),
+                        'median': float(np.median(region_values)),
+                        'std': float(np.std(region_values)),
+                        'volume': int(np.sum(region_mask))
+                    }
 
-            features = loadFileList2DData(
-                [mri_file_path],
-                mask_path,
-                suffer=0,
-                load=1  # 使用中值
-            )
+            return region_stats
+        except Exception as e:
+            print(f"⚠️ 提取脑区统计信息失败: {e}")
+            return None
 
-            if features is None or len(features) == 0:
-                raise ValueError("特征提取失败，请检查文件格式和掩膜路径")
+    def build_model(self, pipeline_config=None):
+        """
+        构建机器学习模型管道
 
-            # 步骤4: 预测
-            prediction_label = self.current_model.predict(features)[0]
+        Args:
+            pipeline_config: 管道配置，包含 preprocessing, feature_selection, classifier
+
+        Returns:
+            构建好的 sklearn Pipeline
+        """
+        try:
+            from sklearn.preprocessing import StandardScaler, MinMaxScaler
+            from sklearn.decomposition import PCA
+            from sklearn.svm import SVC
+            from sklearn.ensemble import RandomForestClassifier
+            from sklearn.linear_model import RidgeClassifier, LogisticRegression
+            from sklearn.pipeline import Pipeline
+
+            config = pipeline_config or {
+                'preprocessing': 'StandardScaler',
+                'feature_selection': 'PCA',
+                'classifier': 'SVM',
+                'n_components': 50
+            }
+
+            scaler_map = {
+                'StandardScaler': StandardScaler(),
+                'MinMaxScaler': MinMaxScaler()
+            }
+            scaler = scaler_map.get(config.get('preprocessing', 'StandardScaler'), StandardScaler())
+
+            n_components = config.get('n_components', 50)
+            pca = PCA(n_components=n_components)
+
+            classifier_map = {
+                'SVM': SVC(kernel='rbf', probability=True, class_weight='balanced'),
+                'RandomForest': RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=42),
+                'Ridge': RidgeClassifier(class_weight='balanced', random_state=42),
+                'LogisticRegression': LogisticRegression(class_weight='balanced', random_state=42, max_iter=1000)
+            }
+            classifier = classifier_map.get(config.get('classifier', 'SVM'), SVC())
+
+            self.current_model = Pipeline([
+                ('scaler', scaler),
+                ('pca', pca),
+                ('classifier', classifier)
+            ])
+
+            self.current_model_id = f"custom_{config.get('classifier')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            self.model_metadata = {
+                'model_name': config.get('classifier'),
+                'model_type': 'Custom',
+                'metrics': {},
+                'training_date': datetime.utcnow().isoformat(),
+                'mask_path': 'N/A'
+            }
+
+            print(f"✅ 模型构建成功: {config.get('classifier')} + {config.get('preprocessing')}")
+            return self.current_model
+
+        except Exception as e:
+            print(f"❌ 模型构建失败: {e}")
+            raise
+
+    def train(self, X_train, y_train, X_test=None, y_test=None, pipeline_config=None):
+        """
+        训练模型并计算真实指标
+
+        Args:
+            X_train: 训练特征
+            y_train: 训练标签
+            X_test: 测试特征（可选）
+            y_test: 测试标签（可选）
+            pipeline_config: 管道配置
+
+        Returns:
+            训练结果字典
+        """
+        try:
+            from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+
+            if self.current_model is None:
+                self.build_model(pipeline_config)
+
+            print(f"🚀 开始训练模型，样本数: {len(X_train)}")
+            self.current_model.fit(X_train, y_train)
+            self.is_trained = True
+
+            y_train_pred = self.current_model.predict(X_train)
+            train_accuracy = accuracy_score(y_train, y_train_pred)
+
+            test_metrics = {}
+            if X_test is not None and y_test is not None:
+                y_test_pred = self.current_model.predict(X_test)
+                y_test_proba = self.current_model.predict_proba(X_test)[:, 1]
+
+                test_metrics = {
+                    'test_accuracy': float(accuracy_score(y_test, y_test_pred)),
+                    'test_precision': float(precision_score(y_test, y_test_pred, zero_division=0)),
+                    'test_recall': float(recall_score(y_test, y_test_pred, zero_division=0)),
+                    'test_f1': float(f1_score(y_test, y_test_pred, zero_division=0))
+                }
+
+                if len(np.unique(y_test)) > 1:
+                    try:
+                        test_metrics['test_auc'] = float(roc_auc_score(y_test, y_test_proba))
+                    except:
+                        test_metrics['test_auc'] = 0.5
+
+            pca_variance = None
+            if hasattr(self.current_model.named_steps.get('pca'), 'explained_variance_ratio_'):
+                pca_variance = self.current_model.named_steps['pca'].explained_variance_ratio_.tolist()
+
+            self.training_metrics = {
+                'train_accuracy': float(train_accuracy),
+                'n_samples_train': len(X_train),
+                'n_features': X_train.shape[1],
+                'pca_variance_explained': pca_variance,
+                'training_timestamp': datetime.utcnow().isoformat()
+            }
+            self.training_metrics.update(test_metrics)
+
+            self.model_metadata['metrics'] = self.training_metrics
+
+            print(f"✅ 训练完成 - 训练准确率: {train_accuracy:.4f}" +
+                  (f", 测试准确率: {test_metrics.get('test_accuracy', 'N/A')}" if test_metrics else ""))
+
+            return {
+                'success': True,
+                **self.training_metrics
+            }
+
+        except Exception as e:
+            print(f"❌ 模型训练失败: {e}")
+            raise
+
+    def predict(self, features):
+        """
+        预测单个样本（兼容 classifier.py 接口）
+
+        Args:
+            features: 特征向量或字典
+
+        Returns:
+            预测结果字典
+        """
+        try:
+            if self.current_model is None:
+                raise RuntimeError("模型尚未加载或训练")
+
+            if isinstance(features, dict):
+                features = features.get('features', features)
+
+            if features.ndim == 1:
+                features = features.reshape(1, -1)
+
+            prediction = self.current_model.predict(features)[0]
             probabilities = self.current_model.predict_proba(features)[0]
 
-            # 步骤5: 计算脑区贡献度
-            region_contributions = self._calculate_region_contributions(features)
+            classes = self.current_model.classes_
+            asd_index = list(classes).index(1) if 1 in classes else 0
+            asd_probability = float(probabilities[asd_index])
 
-            # 步骤6: 组装结果
-            result = {
-                'prediction': 'ASD' if prediction_label == 1 else 'NC',
-                'probability': float(probabilities[1]),
-                'confidence': float(max(probabilities)),
-                'model_used': self.current_model_id,
-                'brain_region_contributions': region_contributions,
-                'feature_shape': features.shape
+            prediction_label = 'ASD' if prediction == 1 else 'NC'
+            confidence = float(np.max(probabilities))
+
+            return {
+                'prediction': prediction_label,
+                'probability': asd_probability,
+                'confidence': confidence,
+                'all_probabilities': {
+                    str(int(cls)): float(prob)
+                    for cls, prob in zip(classes, probabilities)
+                }
             }
-
-            print(f"✅ 预测完成:")
-            print(f"   结果: {result['prediction']}")
-            print(f"   概率: {result['probability']:.4f}")
-            print(f"   置信度: {result['confidence']:.4f}")
-
-            return result
 
         except Exception as e:
             print(f"❌ 预测失败: {e}")
             raise
 
-    def _calculate_region_contributions(self, features: np.ndarray) -> Dict[str, float]:
+    def predict_from_mri_file(self, mri_file_path, mask_path=None):
         """
-        计算各脑区对预测结果的贡献度
-
-        方法：
-        1. 如果模型包含 PCA，获取主成分权重
-        2. 将权重映射回原始脑区
-        3. 归一化得到贡献度评分
+        从 MRI 文件进行端到端预测（兼容 classifier.py 接口）
 
         Args:
-            features: 提取的特征向量
+            mri_file_path: MRI 文件路径
+            mask_path: 可选的掩膜路径
 
         Returns:
-            脑区贡献度字典 {脑区名称: 贡献度}
+            预测结果字典
         """
         try:
-            # 尝试从 Pipeline 中提取各步骤
-            steps = dict(self.current_model.named_steps)
+            feature_data = self.extract_features_from_mri(mri_file_path, mask_path=mask_path)
+            prediction_result = self.predict(feature_data['features'])
 
-            # 获取特征数量
-            n_features = features.shape[1]
+            prediction_result.update({
+                'brain_regions': feature_data.get('brain_regions'),
+                'region_values': feature_data.get('region_values'),
+                'feature_names': feature_data.get('feature_names')
+            })
 
-            # 简化方案：返回均匀分布的贡献度（实际应根据模型类型调整）
-            contributions = {}
-
-            # 如果有 PCA，可以提取主成分权重
-            if 'pca' in steps or 'selectkbest' in steps:
-                # TODO: 实现更精确的贡献度计算
-                for i in range(min(n_features, 10)):  # 只显示前10个脑区
-                    contributions[f'Region_{i+1}'] = round(np.random.uniform(-0.1, 0.1), 4)
-            else:
-                # 对于线性模型，可以直接使用权重
-                for i in range(min(n_features, 10)):
-                    contributions[f'Region_{i+1}'] = round(np.random.uniform(-0.1, 0.1), 4)
-
-            return contributions
+            return prediction_result
 
         except Exception as e:
-            print(f"⚠️ 贡献度计算失败: {e}")
-            return {}
+            print(f"❌ MRI 文件预测失败: {e}")
+            raise
 
+    def save_model(self, model_path):
+        """
+        保存模型到文件
 
-# 测试代码
-if __name__ == '__main__':
-    service = ASDPredictionService()
+        Args:
+            model_path: 保存路径
+        """
+        if not self.is_trained and self.current_model is None:
+            raise RuntimeError("模型尚未训练或加载")
 
-    print("\n" + "="*60)
-    print("🧪 测试预测服务")
-    print("="*60)
+        os.makedirs(os.path.dirname(model_path), exist_ok=True)
 
-    # 列出可用模型
-    models = service.list_available_models()
-    print(f"\n发现 {len(models)} 个模型:")
-    for model in models:
-        print(f"  - {model['model_name']} (准确率: {model['accuracy']*100:.2f}%)")
+        model_data = {
+            'model': self.current_model,
+            'model_name': self.current_model_id,
+            'model_type': 'Custom',
+            'metrics': self.training_metrics or {},
+            'training_date': datetime.utcnow().isoformat(),
+            'mask_path': 'N/A',
+            'is_trained': self.is_trained
+        }
 
-    if models:
-        # 选择第一个模型
-        service.select_model(models[0]['id'])
+        joblib.dump(model_data, model_path)
+        print(f"✅ 模型已保存到: {model_path}")
 
-        # 注意：这里需要真实的 MRI 文件路径才能测试
-        print("\n💡 提示: 要测试完整预测流程，需要提供真实的 MRI 文件路径")
+    def load_model_by_id(self, model_id):
+        """
+        通过模型ID加载模型（兼容旧接口）
+
+        Args:
+            model_id: 模型ID
+        """
+        self.select_model(model_id)
+
+    def get_model_metrics(self):
+        """
+        获取模型性能指标（兼容 classifier.py 接口）
+
+        Returns:
+            模型指标字典
+        """
+        if self.current_model is None:
+            return None
+
+        metrics = {
+            'model_type': self.model_metadata.get('model_type', 'Unknown'),
+            'version': self.current_model_id,
+            'is_trained': self.is_trained
+        }
+
+        if self.training_metrics:
+            metrics.update(self.training_metrics)
+
+        if self.model_metadata and 'metrics' in self.model_metadata:
+            metrics.update(self.model_metadata['metrics'])
+
+        return metrics
+
+    def register_to_model_registry(self, created_by="system", notes=""):
+        """
+        将当前模型注册到模型注册表
+
+        Args:
+            created_by: 创建者
+            notes: 备注
+
+        Returns:
+            版本号或模型ID
+        """
+        if not self.is_trained:
+            raise RuntimeError("模型尚未训练，无法注册")
+
+        try:
+            from ml_core.model_registry import register_new_model
+
+            training_info = {
+                'dataset_size': self.training_metrics.get('n_samples_train', 0) if self.training_metrics else 0,
+                'n_features': self.training_metrics.get('n_features', 0) if self.training_metrics else 0,
+                'training_date': datetime.utcnow().isoformat()
+            }
+
+            hyperparams = {
+                'classifier': self.model_metadata.get('model_name', 'Unknown'),
+                'preprocessing': 'StandardScaler',
+                'n_components': 50
+            }
+
+            metrics = self.training_metrics or {}
+
+            version = register_new_model(
+                model_object=self.current_model,
+                metrics=metrics,
+                training_info=training_info,
+                hyperparams=hyperparams,
+                created_by=created_by,
+                notes=notes
+            )
+
+            print(f"✅ 模型已注册到注册表，版本: {version}")
+            return version
+
+        except ImportError:
+            print("⚠️ 模型注册表模块未找到，跳过注册")
+            return None
+        except Exception as e:
+            print(f"❌ 模型注册失败: {e}")
+            return None
+
+# ... existing code ...

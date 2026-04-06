@@ -10,7 +10,7 @@ from werkzeug.utils import secure_filename
 from app import db
 from app.forms import LoginForm, RegistrationForm, PatientForm, MRIScanForm, ClinicalScoreForm
 from app.models import User, Patient, MRIScan, AnalysisResult, ClinicalScore, SystemLog
-from ml_core.classifier import ASDClassifier
+from ml_core.prediction_service import ASDPredictionService
 from tasks.analysis_tasks import submit_analysis_task, get_task_status
 
 main_bp = Blueprint('main', __name__)
@@ -95,24 +95,33 @@ def analysis_report(result_id):
                            model_metrics=metrics)
 
 
+@main_bp.route('/test-3d-brain')
+@login_required
+def test_3d_brain():
+    """3D脑部可视化测试页面"""
+    return render_template('test_3d_brain.html')
+
+
 @main_bp.route('/api/model/metrics')
 @login_required
 def api_model_metrics():
     """获取模型性能指标 API"""
-    classifier = ASDClassifier()
-
-    models_dir = current_app.config.get('MODELS_FOLDER', 'models')
-    if os.path.exists(models_dir):
-        model_files = [f for f in os.listdir(models_dir) if f.endswith('.pkl')]
-        if model_files:
-            latest_model = os.path.join(models_dir, sorted(model_files)[-1])
-            try:
-                classifier.load_model(latest_model)
-                metrics = classifier.get_model_metrics()
+    from ml_core.prediction_service import ASDPredictionService
+    
+    service = ASDPredictionService()
+    
+    # 尝试加载推荐模型
+    recommended = service.registry.get_recommended_model()
+    if recommended:
+        try:
+            service.select_model(recommended['id'])
+            metrics = service.get_model_metrics()
+            if metrics:
                 return jsonify(metrics)
-            except Exception as e:
-                current_app.logger.error(f"加载模型失败: {e}")
+        except Exception as e:
+            current_app.logger.error(f"加载模型失败: {e}")
 
+    # 返回默认指标
     return jsonify({
         'accuracy': 0.85,
         'sensitivity': 0.82,
@@ -254,19 +263,27 @@ def start_analysis(mri_id):
         return jsonify({'success': False, 'error': '没有权限'}), 403
 
     try:
-        log_action('ANALYSIS_STARTED', f'启动分析: MRI ID={mri_id}')
+        # 获取请求参数
+        data = request.get_json() if request.is_json else {}
+        model_id = data.get('model_id')  # 可选：指定的模型ID
+        use_preprocessing = data.get('use_preprocessing', False)  # 可选：是否使用预处理
+        
+        log_action('ANALYSIS_STARTED', f'启动分析: MRI ID={mri_id}, Model={model_id}, Preprocess={use_preprocessing}')
 
         # 提交异步任务
         task_id = submit_analysis_task(
             mri_scan_id=mri_id,
             patient_id=patient.id,
-            user_id=current_user.id
+            user_id=current_user.id,
+            model_id=model_id,
+            use_preprocessing=use_preprocessing
         )
 
         return jsonify({
             'success': True,
             'task_id': task_id,
-            'message': '分析任务已提交，请稍后查看结果'
+            'message': '分析任务已提交，请稍后查看结果',
+            'preprocessing_enabled': use_preprocessing
         })
 
     except Exception as e:
@@ -284,6 +301,8 @@ def start_batch_analysis():
     """批量启动分析任务（异步）"""
     data = request.get_json()
     mri_ids = data.get('mri_ids', [])
+    model_id = data.get('model_id')  # 可选：指定的模型ID
+    use_preprocessing = data.get('use_preprocessing', False)  # 可选：是否使用预处理
 
     if not mri_ids:
         return jsonify({'success': False, 'error': '未提供MRI ID列表'}), 400
@@ -306,7 +325,9 @@ def start_batch_analysis():
             task_id = submit_analysis_task(
                 mri_scan_id=mri_id,
                 patient_id=patient.id,
-                user_id=current_user.id
+                user_id=current_user.id,
+                model_id=model_id,
+                use_preprocessing=use_preprocessing
             )
             task_ids.append({'mri_id': mri_id, 'task_id': task_id})
 
@@ -320,7 +341,8 @@ def start_batch_analysis():
         'errors': errors,
         'total': len(mri_ids),
         'submitted': len(task_ids),
-        'failed': len(errors)
+        'failed': len(errors),
+        'preprocessing_enabled': use_preprocessing
     })
 
 
@@ -667,6 +689,50 @@ def api_task_status(task_id):
     return jsonify({'success': False, 'error': '任务不存在'}), 404
 
 
+@main_bp.route('/api/analysis/cancel/<task_id>', methods=['POST'])
+@login_required
+def api_cancel_task(task_id):
+    """取消正在运行的任务"""
+    try:
+        success = cancel_task(task_id)
+        
+        if success:
+            log_action('TASK_CANCELLED', f'用户取消了任务: {task_id}')
+            return jsonify({
+                'success': True,
+                'message': '任务已取消'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': '无法取消任务（可能不存在或已完成）'
+            }), 404
+    except Exception as e:
+        current_app.logger.error(f'取消任务失败: {e}')
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@main_bp.route('/api/analysis/stats')
+@login_required
+def api_task_stats():
+    """获取任务管理器统计信息"""
+    try:
+        stats = get_task_manager_stats()
+        return jsonify({
+            'success': True,
+            'stats': stats
+        })
+    except Exception as e:
+        current_app.logger.error(f'获取任务统计失败: {e}')
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 @main_bp.route('/api/analysis/all-tasks')
 @login_required
 def api_all_tasks():
@@ -815,3 +881,5 @@ def internal_error(error):
     """500错误处理"""
     db.session.rollback()
     return render_template('errors/500.html'), 500
+
+

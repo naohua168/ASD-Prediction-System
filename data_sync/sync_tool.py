@@ -1,5 +1,6 @@
 import argparse
 import shutil
+import json
 from pathlib import Path
 from .config import config
 from .exporter import DataExporter
@@ -20,13 +21,15 @@ def export_command(args):
 
 def import_command(args):
     """处理导入命令"""
-    importer = DataImporter()
+    strategy = args.strategy if hasattr(args, 'strategy') and args.strategy else 'skip'
+    importer = DataImporter(conflict_strategy=strategy)
+
     if args.file:
-        importer.import_table(args.file)
+        importer.import_table(args.file, conflict_strategy=strategy)
     elif args.package:
-        importer.import_from_package(args.package)
+        importer.import_from_package(args.package, conflict_strategy=strategy)
     else:
-        importer.import_latest()
+        importer.import_latest(conflict_strategy=strategy)
 
 
 def sync_command(args):
@@ -63,6 +66,10 @@ def main():
     import_parser = subparsers.add_parser('import', help='导入数据库数据')
     import_parser.add_argument('-f', '--file', help='导入指定表文件')
     import_parser.add_argument('-p', '--package', help='导入指定同步包')
+    import_parser.add_argument('-s', '--strategy',
+                              choices=['skip', 'update', 'overwrite', 'merge'],
+                              default='skip',
+                              help='冲突解决策略: skip(跳过), update(更新), overwrite(覆盖), merge(合并)')
     import_parser.set_defaults(func=import_command)
 
     # sync 命令

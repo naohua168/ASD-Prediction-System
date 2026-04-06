@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D脑部可视化测试</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            overflow: hidden;
+        }
+        
+        #container {
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+        }
+        
+        .info-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            max-width: 350px;
+            z-index: 100;
+        }
+        
+        .info-panel h2 {
+            color: #2563eb;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+        
+        .info-item {
+            margin: 10px 0;
+            font-size: 14px;
+            color: #374151;
+        }
+        
+        .info-label {
+            font-weight: bold;
+            color: #1f2937;
+        }
+        
+        .controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(255, 255, 255, 0.95);
+            padding: 15px 25px;
+            border-radius: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            display: flex;
+            gap: 15px;
+            z-index: 100;
+        }
+        
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 20px;
+            background: #3b82f6;
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+        
+        button:hover {
+            background: #2563eb;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+        }
+        
+        button.active {
+            background: #10b981;
+        }
+        
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255, 255, 255, 0.95);
+            padding: 30px 50px;
+            border-radius: 16px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+            text-align: center;
+            z-index: 200;
+        }
+        
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3b82f6;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div id="container"></div>
+    
+    <div class="info-panel">
+        <h2>🧠 3D脑部可视化</h2>
+        <div class="info-item">
+            <span class="info-label">状态:</span>
+            <span id="status">加载中...</span>
+        </div>
+        <div class="info-item">
+            <span class="info-label">预测结果:</span>
+            <span id="prediction">-</span>
+        </div>
+        <div class="info-item">
+            <span class="info-label">置信度:</span>
+            <span id="confidence">-</span>
+        </div>
+        <div class="info-item">
+            <span class="info-label">顶点数:</span>
+            <span id="vertices">-</span>
+        </div>
+        <div class="info-item">
+            <span class="info-label">面片数:</span>
+            <span id="faces">-</span>
+        </div>
+    </div>
+    
+    <div class="controls">
+        <button onclick="resetView()">🔄 重置视角</button>
+        <button onclick="toggleRotation()" id="rotateBtn">▶️ 自动旋转</button>
+        <button onclick="toggleColor('ASD')">🔴 ASD模式</button>
+        <button onclick="toggleColor('NC')">🔵 NC模式</button>
+    </div>
+    
+    <div class="loading" id="loading">
+        <div class="spinner"></div>
+        <div>正在加载3D模型...</div>
+    </div>
+
+    <!-- 引入脑可视化工具 -->
+    <script src="{{ url_for('static', filename='js/brain_visualization.js') }}"></script>
+    
+    <script>
+        let visualizer = null;
+        let isRotating = false;
+        
+        // 页面加载完成后初始化
+        window.addEventListener('load', function() {
+            console.log('🚀 开始初始化3D可视化...');
+            
+            try {
+                // 创建可视化器
+                visualizer = new BrainVisualizer('container', {
+                    backgroundColor: 0x0a0a1a,
+                    enableRotation: true,
+                    autoRotateSpeed: 0.5,
+                    enableZoom: true
+                });
+                
+                // 加载真实数据（需要至少有一个分析结果）
+                setTimeout(() => {
+                    loadRealData();
+                }, 500);
+                
+            } catch (error) {
+                console.error('❌ 初始化失败:', error);
+                document.getElementById('status').textContent = '初始化失败';
+                document.getElementById('loading').style.display = 'none';
+            }
+        });
+        
+        // 加载真实数据（从API获取）
+        function loadRealData() {
+            const analysisId = 1; // 修改为你的分析ID
+            
+            console.log(`🔄 正在加载分析ID ${analysisId} 的网格数据...`);
+            
+            fetch(`/api/analysis/${analysisId}/brain-mesh`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP错误: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.success && data.mesh_data) {
+                        console.log('✅ 接收到网格数据');
+                        console.log('  - 左半球顶点:', data.mesh_data.left_hemisphere.coordinates.length);
+                        console.log('  - 右半球顶点:', data.mesh_data.right_hemisphere.coordinates.length);
+                        
+                        // 创建脑部网格
+                        visualizer.createBrainMesh(data.mesh_data);
+                        
+                        // 应用预测颜色
+                        if (data.prediction && data.confidence) {
+                            visualizer.applyPredictionColors(data.prediction, data.confidence);
+                        }
+                        
+                        // 更新UI
+                        document.getElementById('loading').style.display = 'none';
+                        document.getElementById('status').textContent = '✅ 加载成功';
+                        document.getElementById('prediction').textContent = data.prediction || '-';
+                        document.getElementById('confidence').textContent = 
+                            data.confidence ? `${(data.confidence * 100).toFixed(1)}%` : '-';
+                        
+                        // 计算统计信息
+                        const totalVertices = data.mesh_data.left_hemisphere.coordinates.length + 
+                                              data.mesh_data.right_hemisphere.coordinates.length;
+                        const totalFaces = data.mesh_data.left_hemisphere.faces.length + 
+                                           data.mesh_data.right_hemisphere.faces.length;
+                        
+                        document.getElementById('vertices').textContent = totalVertices.toLocaleString();
+                        document.getElementById('faces').textContent = totalFaces.toLocaleString();
+                        
+                        console.log('✅ 真实数据加载完成');
+                        console.log(`  - 总顶点数: ${totalVertices.toLocaleString()}`);
+                        console.log(`  - 总面片数: ${totalFaces.toLocaleString()}`);
+                    } else {
+                        throw new Error(data.error || '获取数据失败');
+                    }
+                })
+                .catch(error => {
+                    console.error('❌ 加载失败:', error);
+                    document.getElementById('status').textContent = '❌ 加载失败';
+                    document.getElementById('loading').innerHTML = `
+                        <div style="color: red; font-size: 16px;">
+                            <div style="margin-bottom: 10px;">⚠️ 加载失败</div>
+                            <div style="font-size: 12px; color: #666;">${error.message}</div>
+                            <div style="margin-top: 15px; font-size: 12px;">
+                                请确保：<br>
+                                1. 已登录系统<br>
+                                2. 存在分析结果（ID=${analysisId}）<br>
+                                3. MRI文件可用
+                            </div>
+                        </div>
+                    `;
+                });
+        }
+        
+        // 生成模拟半球数据（用于测试）
+        function generateMockHemisphere(side) {
+            const vertices = [];
+            const faces = [];
+            const radius = 50;
+            const segments = 32;
+            const offsetX = side === 'left' ? -25 : 25;
+            
+            // 生成球体顶点
+            for (let lat = 0; lat <= segments; lat++) {
+                const theta = (lat * Math.PI) / segments;
+                const sinTheta = Math.sin(theta);
+                const cosTheta = Math.cos(theta);
+                
+                for (let lon = 0; lon <= segments; lon++) {
+                    const phi = (lon * 2 * Math.PI) / segments;
+                    const sinPhi = Math.sin(phi);
+                    const cosPhi = Math.cos(phi);
+                    
+                    const x = offsetX + radius * sinTheta * cosPhi;
+                    const y = radius * sinTheta * sinPhi;
+                    const z = radius * cosTheta;
+                    
+                    vertices.push(x, y, z);
+                }
+            }
+            
+            // 生成面片索引
+            for (let lat = 0; lat < segments; lat++) {
+                for (let lon = 0; lon < segments; lon++) {
+                    const first = lat * (segments + 1) + lon;
+                    const second = first + segments + 1;
+                    
+                    faces.push(first, second, first + 1);
+                    faces.push(second, second + 1, first + 1);
+                }
+            }
+            
+            return {
+                coordinates: vertices,
+                faces: faces
+            };
+        }
+        
+        // 控制函数
+        function resetView() {
+            if (visualizer) {
+                visualizer.resetView();
+                console.log('🔄 视角已重置');
+            }
+        }
+        
+        function toggleRotation() {
+            if (visualizer) {
+                isRotating = !isRotating;
+                visualizer.toggleAutoRotate(isRotating);
+                const btn = document.getElementById('rotateBtn');
+                btn.textContent = isRotating ? '⏸️ 停止旋转' : '▶️ 自动旋转';
+                btn.classList.toggle('active', isRotating);
+            }
+        }
+        
+        function toggleColor(mode) {
+            if (visualizer) {
+                const confidence = 0.875;
+                visualizer.applyPredictionColors(mode, confidence);
+                console.log(`🎨 切换到${mode}模式`);
+            }
+        }
+        
+        // 键盘快捷键
+        document.addEventListener('keydown', function(e) {
+            switch(e.key) {
+                case 'r':
+                case 'R':
+                    resetView();
+                    break;
+                case ' ':
+                    e.preventDefault();
+                    toggleRotation();
+                    break;
+            }
+        });
+    </script>
+</body>
+</html>

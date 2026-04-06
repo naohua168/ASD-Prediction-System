@@ -1,6 +1,9 @@
 from functools import wraps
-from flask import abort, flash, redirect, url_for
+import logging
+from flask import abort, flash, redirect, url_for, jsonify
 from flask_login import current_user
+
+logger = logging.getLogger(__name__)
 
 
 def permission_required(permission):
@@ -73,5 +76,44 @@ def owner_or_researcher(model_class, id_param='id'):
 
             flash('您没有权限访问此资源', 'error')
             abort(403)
+        return decorated_function
+    return decorator
+
+
+def deprecated_endpoint(message=None, alternative=None):
+    """
+    标记API端点为已弃用，返回明确的迁移提示
+    
+    Args:
+        message: 弃用说明消息
+        alternative: 替代方案说明
+    
+    Returns:
+        装饰器函数
+    
+    Example:
+        @api_bp.route('/old-endpoint')
+        @deprecated_endpoint(
+            message='此端点已移除',
+            alternative='请使用 /analysis/start 并设置 use_preprocessing=True'
+        )
+        def old_endpoint():
+            pass
+    """
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            warning_msg = message or '此API端点已弃用'
+            if alternative:
+                warning_msg += f'。替代方案: {alternative}'
+            
+            logger.warning(f'⚠️ 尝试访问已弃用的API端点: {f.__name__} - {warning_msg}')
+            
+            return jsonify({
+                'success': False,
+                'error': '此功能已弃用',
+                'message': warning_msg,
+                'status': 503
+            }), 503
         return decorated_function
     return decorator

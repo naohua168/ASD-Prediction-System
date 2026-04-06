@@ -1,7 +1,7 @@
+# app/api/__init__.py
 from flask import Blueprint
 
-# 创建 API 蓝图
-api_bp = Blueprint('api', __name__, url_prefix='/api')
+api_bp = Blueprint('api', __name__)
 
-# 导入路由以确保注册
+# 导入路由以注册端点
 from app.api import routes

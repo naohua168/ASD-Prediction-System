@@ -144,8 +144,106 @@ class BrainVisualizer {
 
     /**
      * 创建脑部网格
+     * 支持两种格式：
+     * 1. 新格式: {left_hemisphere: {coordinates, faces}, right_hemisphere: {...}}
+     * 2. 旧格式: {vertices, faces, normals}
      */
     createBrainMesh(meshData) {
+        // 检测数据格式
+        if (meshData.left_hemisphere && meshData.right_hemisphere) {
+            // 新格式：左右半球分开
+            this.createDualHemisphereMesh(meshData);
+        } else if (meshData.vertices && meshData.faces) {
+            // 旧格式：单一网格
+            this.createSingleMesh(meshData);
+        } else {
+            console.error('❌ 不支持的网格数据格式');
+            this.loadDefaultBrain();
+        }
+    }
+
+    /**
+     * 创建双半球网格（新格式）
+     */
+    createDualHemisphereMesh(meshData) {
+        const group = new THREE.Group();
+
+        // 创建左侧半球
+        if (meshData.left_hemisphere && meshData.left_hemisphere.coordinates.length > 0) {
+            const leftMesh = this.createHemisphereMesh(
+                meshData.left_hemisphere,
+                0x4a90e2,  // 蓝色
+                'left'
+            );
+            group.add(leftMesh);
+        }
+
+        // 创建右侧半球
+        if (meshData.right_hemisphere && meshData.right_hemisphere.coordinates.length > 0) {
+            const rightMesh = this.createHemisphereMesh(
+                meshData.right_hemisphere,
+                0x5ba3f5,  // 稍浅的蓝色
+                'right'
+            );
+            group.add(rightMesh);
+        }
+
+        this.brainMesh = group;
+        this.scene.add(this.brainMesh);
+
+        // 保存原始颜色
+        this.originalColors = {
+            left: 0x4a90e2,
+            right: 0x5ba3f5
+        };
+
+        const totalVertices = (meshData.left_hemisphere?.coordinates.length || 0) + 
+                              (meshData.right_hemisphere?.coordinates.length || 0);
+        const totalFaces = (meshData.left_hemisphere?.faces.length || 0) + 
+                           (meshData.right_hemisphere?.faces.length || 0);
+        console.log(`🧠 双半球网格创建完成: ${totalVertices / 3} 顶点, ${totalFaces / 3} 面`);
+    }
+
+    /**
+     * 创建单个半球的网格
+     */
+    createHemisphereMesh(hemisphereData, color, side) {
+        const geometry = new THREE.BufferGeometry();
+
+        // 设置顶点坐标
+        const coords = hemisphereData.coordinates;
+        const verticesArray = new Float32Array(coords.flat());
+        geometry.setAttribute('position', new THREE.BufferAttribute(verticesArray, 3));
+
+        // 设置面片索引
+        const faces = hemisphereData.faces;
+        const facesArray = new Uint32Array(faces.flat());
+        geometry.setIndex(new THREE.BufferAttribute(facesArray, 1));
+
+        // 计算法线
+        geometry.computeVertexNormals();
+
+        // 创建材质
+        const material = new THREE.MeshPhongMaterial({
+            color: color,
+            transparent: true,
+            opacity: 0.85,
+            shininess: 60,
+            specular: 0x444444,
+            side: THREE.DoubleSide,
+            flatShading: false
+        });
+
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.name = `${side}_hemisphere`;
+
+        return mesh;
+    }
+
+    /**
+     * 创建单一网格（旧格式兼容）
+     */
+    createSingleMesh(meshData) {
         const { vertices, faces, normals } = meshData;
 
         // 创建BufferGeometry
@@ -189,7 +287,7 @@ class BrainVisualizer {
             b: material.color.b
         };
 
-        console.log(`🧠 脑部网格创建完成: ${vertices.length / 3} 顶点, ${faces.length / 3} 面`);
+        console.log(`🧠 单网格创建完成: ${vertices.length / 3} 顶点, ${faces.length / 3} 面`);
     }
 
     /**
@@ -198,19 +296,33 @@ class BrainVisualizer {
     applyPredictionColors(prediction, confidence) {
         if (!this.brainMesh) return;
 
-        const material = this.brainMesh.material;
-
+        // 确定目标颜色
+        let targetColor;
         if (prediction === 'ASD') {
             // ASD: 红色调
             const intensity = confidence || 0.8;
-            material.color.setRGB(0.9, 0.3 + (1 - intensity) * 0.3, 0.3);
+            targetColor = new THREE.Color(0.9, 0.3 + (1 - intensity) * 0.3, 0.3);
         } else {
             // NC: 蓝绿色调
             const intensity = confidence || 0.8;
-            material.color.setRGB(0.2, 0.7 + intensity * 0.2, 0.6);
+            targetColor = new THREE.Color(0.2, 0.7 + intensity * 0.2, 0.6);
         }
 
-        console.log(`🎨 应用预测颜色: ${prediction} (置信度: ${(confidence * 100).toFixed(1)}%)`);
+        // 检查是否为双半球网格
+        if (this.brainMesh.type === 'Group') {
+            // 双半球：为每个半球设置颜色
+            this.brainMesh.children.forEach((mesh, index) => {
+                if (mesh.material) {
+                    mesh.material.color.copy(targetColor);
+                }
+            });
+            console.log(`🎨 应用预测颜色到双半球: ${prediction} (置信度: ${(confidence * 100).toFixed(1)}%)`);
+        } else {
+            // 单网格：直接设置颜色
+            const material = this.brainMesh.material;
+            material.color.copy(targetColor);
+            console.log(`🎨 应用预测颜色: ${prediction} (置信度: ${(confidence * 100).toFixed(1)}%)`);
+        }
     }
 
     /**

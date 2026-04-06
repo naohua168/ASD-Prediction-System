@@ -54,49 +54,43 @@ class MeshCacheManager:
 
         # 生成新的网格
         print(f"🔄 生成新的网格数据...")
-
-        # 注意：nifti_to_mesh.py 已删除，此功能暂时不可用
-        # 如需使用3D可视化，请基于 Three.js 直接在前端实现
-        print("⚠️ 警告：网格生成功能已禁用（nifti_to_mesh.py 已删除）")
-        return None
-        
-        # 以下为原代码，已注释
-        """
-        from ml_core.nifti_to_mesh import NiftiToMeshConverter
-
+                
+        from app.utils.mesh_generator import generate_brain_mesh
+                
         output_filename = f"mesh_p{patient_id}_m{mri_scan_id}_{cache_key[:8]}.json"
         output_path = os.path.join(self.cache_dir, output_filename)
-
+                
         try:
-            converter = NiftiToMeshConverter(
-                smoothing_sigma=1.5,
-                decimation_ratio=0.12
-            )
-
-            converter.convert_nifti_to_mesh(
-                nifti_path,
-                output_path,
+            result_path = generate_brain_mesh(
+                nifti_path=nifti_path,
+                output_path=output_path,
                 threshold=0.3
             )
-
+                    
+            if not result_path or not os.path.exists(result_path):
+                print(f"❌ 网格生成失败")
+                return None
+                    
             # 更新缓存索引
             self.cache_index[cache_key] = {
-                'file_path': output_path,
+                'file_path': result_path,
                 'nifti_path': nifti_path,
                 'patient_id': patient_id,
                 'mri_scan_id': mri_scan_id,
                 'created_at': datetime.now().isoformat(),
-                'file_size': os.path.getsize(output_path) if os.path.exists(output_path) else 0
+                'file_size': os.path.getsize(result_path)
             }
-
+                    
             self._save_cache_index()
-
-            return output_path
-
+            print(f"✅ 网格数据已缓存: {result_path}")
+                    
+            return result_path
+                    
         except Exception as e:
             print(f"❌ 网格生成失败: {e}")
+            import traceback
+            traceback.print_exc()
             return None
-        """
 
     def get_mesh_data(self, mesh_json_path: str) -> Optional[Dict]:
         """读取网格JSON数据"""
