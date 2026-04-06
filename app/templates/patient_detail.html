@@ -299,8 +299,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 document.querySelectorAll('[id^="modelSelector_"]').forEach(selector => {
                     const option = document.createElement('option');
                     option.value = model.id;
-                    option.text = `${model.name} (准确率: ${(model.accuracy*100).toFixed(1)}%)`;
-                    option.dataset.description = `训练于 ${model.trained_at}, AUC: ${model.auc}`;
+                    option.text = `${model.model_name} (准确率: ${(model.accuracy*100).toFixed(1)}%)`;
+                    option.dataset.description = `类型: ${model.model_type}, AUC: ${model.auc.toFixed(3)}, 文件大小: ${model.file_size_mb} MB, 训练于: ${model.trained_at}`;
                     selector.appendChild(option);
                 });
             });
@@ -364,7 +364,10 @@ function startAnalysisWithModel(mriScanId) {
     
     fetch('/api/analysis/predict-with-model', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': '{{ csrf_token() }}'
+        },
         body: JSON.stringify({
             mri_scan_id: mriScanId,
             model_id: modelId
@@ -380,8 +383,8 @@ function startAnalysisWithModel(mriScanId) {
         console.log('分析任务响应:', data);
         
         if (data.success) {
-            alert('✅ 分析任务已提交！\n\n任务ID: ' + data.task_id + '\n\n请稍后查看结果。');
-            // 可以选择跳转到任务列表页或报告页
+            alert('✅ 分析完成！\n\n预测结果: ' + data.result.prediction + '\n概率: ' + (data.result.probability * 100).toFixed(2) + '%\n置信度: ' + (data.result.confidence * 100).toFixed(2) + '%');
+            // 跳转到报告页面
             if (data.result_id) {
                 window.location.href = `/analysis/report/${data.result_id}`;
             } else {

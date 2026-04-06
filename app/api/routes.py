@@ -608,6 +608,129 @@ def get_storage_stats():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+# ========== 新增：模型管理和预测接口 ==========
+
+@api_bp.route('/models/list', methods=['GET'])
+@login_required
+def list_models():
+    """
+    获取可用模型列表
+
+    Returns:
+        JSON: {
+            "success": true,
+            "models": [...],
+            "count": 2
+        }
+    """
+    try:
+        from ml_core.prediction_service import ASDPredictionService
+        service = ASDPredictionService()
+        models = service.list_available_models()
+
+        return jsonify({
+            'success': True,
+            'models': models,
+            'count': len(models)
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@api_bp.route('/analysis/predict-with-model', methods=['POST'])
+@login_required
+def predict_with_selected_model():
+    """
+    使用指定模型进行预测
+
+    Request Body:
+    {
+        "mri_scan_id": 123,
+        "model_id": "MinMaxScaler+Bagging_Optuna_fold5_iter9_20260406"
+    }
+
+    Returns:
+        JSON: {
+            "success": true,
+            "result": {
+                "prediction": "ASD",
+                "probability": 0.87,
+                "confidence": 0.92,
+                "model_used": "...",
+                "brain_region_contributions": {...}
+            },
+            "result_id": 456
+        }
+    """
+    try:
+        data = request.get_json()
+        mri_scan_id = data.get('mri_scan_id')
+        model_id = data.get('model_id')
+
+        if not mri_scan_id or not model_id:
+            return jsonify({
+                'success': False,
+                'error': '缺少必要参数: mri_scan_id 和 model_id'
+            }), 400
+
+        # 1. 获取 MRI 扫描记录
+        mri_scan = MRIScan.query.get_or_404(mri_scan_id)
+
+        # 2. 验证文件是否存在
+        if not os.path.exists(mri_scan.file_path):
+            return jsonify({
+                'success': False,
+                'error': f'MRI 文件不存在: {mri_scan.file_path}'
+            }), 404
+
+        # 3. 初始化预测服务并选择模型
+        from ml_core.prediction_service import ASDPredictionService
+        service = ASDPredictionService()
+        service.select_model(model_id)
+
+        # 4. 执行预测
+        result = service.predict_from_mri(mri_scan.file_path)
+
+        # 5. 保存结果到数据库
+        analysis_result = AnalysisResult(
+            patient_id=mri_scan.patient_id,
+            mri_scan_id=mri_scan.id,
+            prediction=result['prediction'],
+            probability=result['probability'],
+            confidence=result['confidence'],
+            model_version=model_id,
+            features_used=json.dumps({
+                'brain_regions': result['brain_region_contributions'],
+                'model_type': model_id
+            }),
+            analyzed_by=current_user.id
+        )
+        db.session.add(analysis_result)
+        db.session.commit()
+
+        # 6. 返回结果
+        return jsonify({
+            'success': True,
+            'result': result,
+            'result_id': analysis_result.id
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+
+
+
+
+
 
 @api_bp.route('/models/list', methods=['GET'])
 @login_required

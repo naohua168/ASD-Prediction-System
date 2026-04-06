@@ -195,40 +195,51 @@ def _execute_analysis_task(task: AnalysisTask, model_id: Optional[str] = None):
             emit_task_failed(task.task_id, str(e))
             raise
 
-
-def submit_analysis_task(mri_scan_id: int, patient_id: int, user_id: int,
-                         model_id: Optional[str] = None) -> str:
+def submit_analysis_task(
+    mri_scan_id: int, 
+    patient_id: int, 
+    user_id: int,
+    model_id: str = None  # 新增参数：用户选择的模型ID
+) -> str:
     """
-    提交异步分析任务
-
+    提交分析任务（使用后台线程）
+    
     Args:
-        mri_scan_id: MRI扫描ID
+        mri_scan_id: MRI扫描记录ID
         patient_id: 患者ID
         user_id: 用户ID
-        model_id: 用户选择的模型ID（可选），如 'MinMaxScaler+PCA+SVM_Optuna_fold5_iter1'
-                  如果为 None，则自动使用性能最好的模型
-
+        model_id: 可选，指定的模型ID，如果不提供则使用默认模型
+    
     Returns:
-        str: 任务ID
+        task_id: 任务ID
     """
     import uuid
+    
+    # 生成唯一任务ID
     task_id = str(uuid.uuid4())
-
+    
     # 创建任务对象
-    task = AnalysisTask(task_id, mri_scan_id, patient_id, user_id)
+    task = AnalysisTask(
+        task_id=task_id,
+        mri_scan_id=mri_scan_id,
+        patient_id=patient_id,
+        user_id=user_id
+    )
+    
+    # 存储任务状态
     task_status_store[task_id] = task
-
-    # 启动后台线程
+    
+    # 启动后台线程执行任务
     thread = threading.Thread(
         target=_execute_analysis_task,
         args=(task, model_id),
-        daemon=True  # 守护线程，主程序退出时自动终止
+        daemon=True
     )
     thread.start()
-
-    logger.info(f"任务已提交: {task_id}, Model: {model_id or 'auto'}")
+    
+    logger.info(f"分析任务已提交: {task_id}, Model={model_id}")
+    
     return task_id
-
 
 def get_task_status(task_id: str) -> Optional[dict]:
     """
