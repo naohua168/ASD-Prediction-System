@@ -1,0 +1,224 @@
+<!-- 文件路径: E:\自闭症\ASD-Prediction-System\app\templates\analysis_tasks.html -->
+{% extends "base.html" %}
+
+{% block title %}分析任务管理{% endblock %}
+
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+<style>
+    .task-card {
+        transition: all 0.3s;
+    }
+    .task-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 6px 15px rgba(0, 0, 0, 0.1);
+    }
+    .status-badge {
+        display: inline-block;
+        padding: 6px 12px;
+        border-radius: 20px;
+        font-size: 12px;
+        font-weight: 600;
+    }
+    .status-pending { background: #fef3c7; color: #f59e0b; }
+    .status-running { background: #dbeafe; color: #2563eb; }
+    .status-completed { background: #d1fae5; color: #10b981; }
+    .status-failed { background: #fee2e2; color: #ef4444; }
+    .progress-ring {
+        width: 60px;
+        height: 60px;
+    }
+    .progress-ring-circle {
+        transition: stroke-dashoffset 0.35s;
+        transform: rotate(-90deg);
+        transform-origin: 50% 50%;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="dashboard-container">
+    <div class="panel-header" style="margin-bottom: 20px;">
+        <h2>⚙️ 分析任务管理</h2>
+        <button class="brain-btn" onclick="refreshTasks()">
+            <i class="fas fa-sync-alt"></i> 刷新
+        </button>
+    </div>
+
+    <div class="stats-grid" style="margin-bottom: 30px;">
+        <div class="stat-card">
+            <div class="stat-label">总任务数</div>
+            <div class="stat-value" id="totalTasks">0</div>
+        </div>
+        <div class="stat-card warning">
+            <div class="stat-label">运行中</div>
+            <div class="stat-value" id="runningTasks">0</div>
+        </div>
+        <div class="stat-card success">
+            <div class="stat-label">已完成</div>
+            <div class="stat-value" id="completedTasks">0</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">失败</div>
+            <div class="stat-value" id="failedTasks">0</div>
+        </div>
+    </div>
+
+    <div id="tasksList" style="display: grid; gap: 15px;">
+        <!-- 任务列表将通过JavaScript动态加载 -->
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/analysis.js') }}"></script>
+<script>
+let tasksData = [];
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadTasks();
+    setInterval(loadTasks, 10000); // 每10秒自动刷新
+});
+
+async function loadTasks() {
+    try {
+        const response = await fetch('/api/analysis/tasks');
+        const data = await response.json();
+
+        if (data.tasks) {
+            tasksData = data.tasks;
+            renderTasks();
+            updateStats();
+        }
+    } catch (error) {
+        console.error('加载任务失败:', error);
+    }
+}
+
+function renderTasks() {
+    const container = document.getElementById('tasksList');
+
+    if (tasksData.length === 0) {
+        container.innerHTML = `
+            <div style="text-align: center; padding: 60px; color: #6b7280;">
+                <i class="fas fa-tasks" style="font-size: 48px; margin-bottom: 20px; opacity: 0.3;"></i>
+                <p>暂无分析任务</p>
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = tasksData.map(task => `
+        <div class="task-card panel">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div style="flex: 1;">
+                    <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 10px;">
+                        <span class="status-badge status-${task.status}">${getStatusText(task.status)}</span>
+                        <span style="color: #6b7280; font-size: 14px;">${formatDate(task.created_at)}</span>
+                    </div>
+                    <h4 style="margin: 0 0 5px 0;">患者: ${task.patient_name}</h4>
+                    <p style="margin: 0; color: #6b7280; font-size: 14px;">MRI: ${task.mri_filename}</p>
+
+                    ${task.status === 'running' ? `
+                    <div style="margin-top: 15px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                            <span style="font-size: 13px;">处理进度</span>
+                            <span style="font-size: 13px; color: #2563eb;">${task.progress || 0}%</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: ${task.progress || 0}%"></div>
+                        </div>
+                    </div>
+                    ` : ''}
+
+                    ${task.status === 'completed' && task.result ? `
+                    <div style="margin-top: 15px; padding: 15px; background: #f9fafb; border-radius: 8px;">
+                        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px;">
+                            <div>
+                                <div style="font-size: 12px; color: #6b7280;">预测结果</div>
+                                <div style="font-weight: bold; color: ${task.result.prediction === 'ASD' ? '#ef4444' : '#10b981'};">
+                                    ${task.result.prediction}
+                                </div>
+                            </div>
+                            <div>
+                                <div style="font-size: 12px; color: #6b7280;">概率</div>
+                                <div style="font-weight: bold;">${(task.result.probability * 100).toFixed(2)}%</div>
+                            </div>
+                            <div>
+                                <div style="font-size: 12px; color: #6b7280;">置信度</div>
+                                <div style="font-weight: bold;">${(task.result.confidence * 100).toFixed(2)}%</div>
+                            </div>
+                        </div>
+                    </div>
+                    ` : ''}
+                </div>
+
+                <div style="display: flex; gap: 10px; margin-left: 20px;">
+                    ${task.status === 'completed' && task.result_id ? `
+                    <a href="/analysis/report/${task.result_id}" class="brain-btn">
+                        <i class="fas fa-file-medical"></i> 查看报告
+                    </a>
+                    ` : ''}
+                    ${task.status === 'failed' ? `
+                    <button class="brain-btn" onclick="retryTask(${task.id})" style="background: #f59e0b;">
+                        <i class="fas fa-redo"></i> 重试
+                    </button>
+                    ` : ''}
+                </div>
+            </div>
+        </div>
+    `).join('');
+}
+
+function updateStats() {
+    document.getElementById('totalTasks').textContent = tasksData.length;
+    document.getElementById('runningTasks').textContent =
+        tasksData.filter(t => t.status === 'running').length;
+    document.getElementById('completedTasks').textContent =
+        tasksData.filter(t => t.status === 'completed').length;
+    document.getElementById('failedTasks').textContent =
+        tasksData.filter(t => t.status === 'failed').length;
+}
+
+function getStatusText(status) {
+    const statusMap = {
+        'pending': '等待中',
+        'running': '运行中',
+        'completed': '已完成',
+        'failed': '失败'
+    };
+    return statusMap[status] || status;
+}
+
+function formatDate(dateStr) {
+    if (!dateStr) return 'N/A';
+    const date = new Date(dateStr);
+    return date.toLocaleString('zh-CN');
+}
+
+function refreshTasks() {
+    loadTasks();
+}
+
+async function retryTask(taskId) {
+    if (!confirm('确定要重试此任务吗？')) return;
+
+    try {
+        const response = await fetch(`/api/analysis/retry/${taskId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            showNotification('成功', '任务已重新提交', 'success');
+            loadTasks();
+        } else {
+            showNotification('失败', data.error || '重试失败', 'error');
+        }
+    } catch (error) {
+        showNotification('错误', '网络请求失败', 'error');
+    }
+}
+</script>
+{% endblock %}

@@ -129,3 +129,119 @@ def get_mask_path(subdir_chain, filename):
 def get_result_path(subdir_chain, filename):
     """获取实验结果路径: results/Results_gm/子目录/文件名"""
     return get_file_path("results", ["Results_gm"] + subdir_chain, filename)
+
+
+# ==============================================
+# 存储管理增强功能
+# ==============================================
+def get_storage_summary():
+    """
+    获取存储概览
+    :return: 存储统计字典
+    """
+    import shutil
+
+    summary = {}
+
+    # 计算各目录大小
+    directories = {
+        'uploads': UPLOAD_ROOT,
+        'masks': MASK_ROOT,
+        'results': RESULT_ROOT,
+        'temp': TEMP_ROOT
+    }
+
+    for name, path in directories.items():
+        if os.path.exists(path):
+            total_size = 0
+            file_count = 0
+            for dirpath, dirnames, filenames in os.walk(path):
+                for filename in filenames:
+                    filepath = os.path.join(dirpath, filename)
+                    if os.path.exists(filepath):
+                        total_size += os.path.getsize(filepath)
+                        file_count += 1
+
+            summary[name] = {
+                'total_size_bytes': total_size,
+                'total_size_mb': round(total_size / (1024 * 1024), 2),
+                'file_count': file_count
+            }
+        else:
+            summary[name] = {
+                'total_size_bytes': 0,
+                'total_size_mb': 0,
+                'file_count': 0
+            }
+
+    # 磁盘空间
+    try:
+        total, used, free = shutil.disk_usage(BASE_DIR)
+        summary['disk'] = {
+            'total_gb': round(total / (1024**3), 2),
+            'used_gb': round(used / (1024**3), 2),
+            'free_gb': round(free / (1024**3), 2),
+            'used_percent': round((used / total) * 100, 2)
+        }
+    except Exception:
+        summary['disk'] = {}
+
+    return summary
+
+
+def cleanup_temp_files(max_age_days=7):
+    """
+    清理超过指定天数的临时文件
+    :param max_age_days: 最大保留天数
+    :return: 删除的文件数量
+    """
+    import time
+
+    if not os.path.exists(TEMP_ROOT):
+        return 0
+
+    deleted_count = 0
+    current_time = time.time()
+    max_age_seconds = max_age_days * 24 * 3600
+
+    for filename in os.listdir(TEMP_ROOT):
+        filepath = os.path.join(TEMP_ROOT, filename)
+        if os.path.isfile(filepath):
+            file_age = current_time - os.path.getmtime(filepath)
+            if file_age > max_age_seconds:
+                try:
+                    os.remove(filepath)
+                    deleted_count += 1
+                except Exception:
+                    pass
+
+    return deleted_count
+
+
+def verify_file_integrity(file_path):
+    """
+    验证文件完整性
+    :param file_path: 文件路径
+    :return: bool
+    """
+    if not os.path.exists(file_path):
+        return False
+
+    try:
+        # 检查文件大小是否合理
+        file_size = os.path.getsize(file_path)
+        if file_size == 0:
+            return False
+
+        # 对于 NIfTI 文件，尝试验证文件头
+        if file_path.endswith('.nii') or file_path.endswith('.nii.gz'):
+            try:
+                import nibabel as nib
+                img = nib.load(file_path)
+                return img is not None
+            except Exception:
+                return False
+
+        return True
+    except Exception:
+        return False

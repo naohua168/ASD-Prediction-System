@@ -249,56 +249,6 @@ def install_with_conda():
         return False
 
 
-# 检查Redis
-def check_redis():
-    """✅ 检查 Redis 服务"""
-    print_info("检查 Redis 服务...")
-
-    # 首先检查 redis-cli 是否可用
-    try:
-        success, stdout, stderr = run_command(["redis-cli", "ping"], check=False)
-        if success and "PONG" in stdout:
-            print_success("Redis 服务正在运行")
-            return True
-    except FileNotFoundError:
-        print_warning("Redis 客户端未安装，无法检查服务状态")
-
-    # 平台特定处理
-    if sys.platform == 'win32':
-        print_info("Windows 系统：请确保已安装 Redis for Windows")
-        print_info("下载地址：https://github.com/microsoftarchive/redis/releases")
-        print_info("建议安装 3.0.504 或 3.2.1 版本")
-
-        # 尝试检查 Windows 服务
-        try:
-            success, stdout, stderr = run_command(["sc", "query", "Redis"], check=False)
-            if success and "RUNNING" in stdout:
-                print_success("Redis Windows 服务正在运行")
-                return True
-        except:
-            pass
-
-        return False
-    else:
-        # Linux/Mac - 尝试多种检查方式
-        commands = [
-            ["systemctl", "is-active", "redis"],
-            ["service", "redis", "status"],
-            ["pgrep", "-f", "redis-server"]
-        ]
-
-        for cmd in commands:
-            success, stdout, stderr = run_command(cmd, check=False)
-            if success:
-                print_success(f"Redis 服务正在运行 (通过命令: {' '.join(cmd)})")
-                return True
-
-        print_warning("Redis 服务未运行，请手动启动：")
-        print_warning("  sudo systemctl start redis")
-        print_warning("  或")
-        print_warning("  redis-server --daemonize yes")
-        return False
-
 
 # 数据库迁移
 def migrate_database():
@@ -380,30 +330,6 @@ def start_services():
                 print_error(f"Flask 应用进程已退出: {stderr}")
                 return False
 
-        # 启动 Celery
-        print_info("启动 Celery Worker...")
-        celery_proc = subprocess.Popen(
-            ["celery", "-A", "tasks.analysis_tasks.celery", "worker", "--loglevel=info"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            universal_newlines=True
-        )
-        running_processes.append(("Celery", celery_proc))
-
-        # 等待 Celery 启动
-        time.sleep(3)
-
-        # 简单检查 Celery 是否运行
-        success, stdout, stderr = run_command(
-            ["celery", "-A", "tasks.analysis_tasks.celery", "status"],
-            check=False
-        )
-
-        if success:
-            print_success("Celery Worker 启动成功")
-        else:
-            print_warning("Celery Worker 可能未启动成功，检查错误日志")
-
         return True
 
     except Exception as e:
@@ -463,20 +389,15 @@ def deploy_windows():
         #if not install_dependencies():
            # return False
 
-        # 3. 检查 Redis
-        if not check_redis():
-            print_warning("Redis 未运行，某些功能可能受限")
-            # 不立即返回 False，让用户决定是否继续
-
-        # 4. 数据库迁移
+        # 3. 数据库迁移
        # if not migrate_database():
            # return False
 
-        # 5. 启动服务
+        # 4. 启动服务
         if not start_services():
             return False
 
-        # 6. 验证部署
+        # 5. 验证部署
         if not verify_deployment():
             print_warning("部署验证未通过，但服务可能已启动")
             # 不立即返回 False，让用户检查日志
