@@ -1,0 +1,643 @@
+{% extends "base.html" %}
+
+{% block title %}MRI预处理质量控制报告{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <!-- 页面标题 -->
+    <div class="mb-6">
+        <h1 class="text-3xl font-bold text-gray-800 mb-2">
+            <i class="fas fa-microscope mr-2"></i>MRI预处理质量控制报告
+        </h1>
+        <p class="text-gray-600">查看MRI数据预处理的详细质量指标和中间结果</p>
+    </div>
+
+    <!-- 加载状态 -->
+    <div id="loadingState" class="bg-white rounded-lg shadow-md p-8 text-center">
+        <i class="fas fa-spinner fa-spin text-4xl text-blue-500 mb-4"></i>
+        <p class="text-gray-600">正在加载质量控制报告...</p>
+    </div>
+
+    <!-- 错误提示 -->
+    <div id="errorState" class="hidden bg-red-50 border-l-4 border-red-500 p-4 rounded">
+        <div class="flex items-start">
+            <i class="fas fa-exclamation-circle text-red-500 mt-1 mr-3"></i>
+            <div>
+                <h3 class="text-red-800 font-semibold">加载失败</h3>
+                <p id="errorMessage" class="text-red-700 mt-1"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 主要内容区域 -->
+    <div id="reportContent" class="hidden space-y-6">
+        
+        <!-- 基本信息卡片 -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h2 class="text-xl font-semibold mb-4 flex items-center">
+                <i class="fas fa-info-circle text-blue-500 mr-2"></i>
+                基本信息
+            </h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="border rounded-lg p-4">
+                    <div class="text-sm text-gray-600 mb-1">MRI扫描ID</div>
+                    <div id="mriScanId" class="text-lg font-semibold text-gray-800">-</div>
+                </div>
+                <div class="border rounded-lg p-4">
+                    <div class="text-sm text-gray-600 mb-1">文件名</div>
+                    <div id="filename" class="text-lg font-semibold text-gray-800 truncate">-</div>
+                </div>
+                <div class="border rounded-lg p-4">
+                    <div class="text-sm text-gray-600 mb-1">处理状态</div>
+                    <div id="status" class="text-lg font-semibold">-</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 质量控制总览 -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h2 class="text-xl font-semibold mb-4 flex items-center">
+                <i class="fas fa-check-circle text-green-500 mr-2"></i>
+                质量控制总览
+            </h2>
+            
+            <div class="flex items-center justify-center mb-6">
+                <div id="qcPassedBadge" class="px-6 py-3 rounded-full text-lg font-bold">
+                    -
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- SNR指标 -->
+                <div class="border rounded-lg p-4 hover:shadow-lg transition-shadow">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="font-semibold text-gray-700">信噪比 (SNR)</h3>
+                        <i class="fas fa-signal text-blue-500"></i>
+                    </div>
+                    <div id="snrValue" class="text-3xl font-bold text-gray-800 mb-2">-</div>
+                    <div class="text-sm text-gray-600">
+                        建议值: > 5.0（越高越好）
+                    </div>
+                    <div id="snrIndicator" class="mt-2 h-2 bg-gray-200 rounded-full overflow-hidden">
+                        <div class="h-full bg-gradient-to-r from-red-500 via-yellow-500 to-green-500" style="width: 0%"></div>
+                    </div>
+                </div>
+
+                <!-- 脑体积指标 -->
+                <div class="border rounded-lg p-4 hover:shadow-lg transition-shadow">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="font-semibold text-gray-700">脑体积</h3>
+                        <i class="fas fa-brain text-purple-500"></i>
+                    </div>
+                    <div id="brainVolumeValue" class="text-3xl font-bold text-gray-800 mb-2">-</div>
+                    <div class="text-sm text-gray-600">
+                        单位: 体素数 (voxels)
+                    </div>
+                    <div class="text-xs text-gray-500 mt-2">
+                        正常范围: 约 600,000 - 2,000,000 体素
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 预处理步骤 -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h2 class="text-xl font-semibold mb-4 flex items-center">
+                <i class="fas fa-tasks text-indigo-500 mr-2"></i>
+                预处理步骤完成情况
+            </h2>
+            
+            <div id="stepsList" class="space-y-3">
+                <!-- 动态生成步骤列表 -->
+            </div>
+        </div>
+
+        <!-- 中间结果可视化 -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h2 class="text-xl font-semibold mb-4 flex items-center">
+                <i class="fas fa-images text-purple-500 mr-2"></i>
+                中间结果可视化
+            </h2>
+            
+            <!-- 可视化控制栏 -->
+            <div class="mb-4 flex flex-wrap gap-3">
+                <button id="btnOriginal" onclick="showImage('original')" class="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors">
+                    <i class="fas fa-file-medical mr-2"></i>原始图像
+                </button>
+                <button id="btnPreprocessed" onclick="showImage('preprocessed')" class="px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg transition-colors">
+                    <i class="fas fa-check-double mr-2"></i>预处理后
+                </button>
+                <button id="btnMask" onclick="showImage('mask')" class="px-4 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded-lg transition-colors disabled:opacity-50" disabled>
+                    <i class="fas fa-brain mr-2"></i>脑掩膜
+                </button>
+                <button id="btnCompare" onclick="toggleCompareMode()" class="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg transition-colors">
+                    <i class="fas fa-columns mr-2"></i>对比模式
+                </button>
+            </div>
+            
+            <!-- Papaya查看器容器 -->
+            <div id="viewerContainer" class="relative border-2 border-gray-300 rounded-lg overflow-hidden" style="height: 500px; background: #000;">
+                <div id="papayaViewer"></div>
+                
+                <!-- 加载提示 -->
+                <div id="viewerLoading" class="absolute inset-0 flex items-center justify-center bg-black bg-opacity-75">
+                    <div class="text-center">
+                        <i class="fas fa-spinner fa-spin text-4xl text-blue-500 mb-4"></i>
+                        <p class="text-white">正在加载MRI图像...</p>
+                    </div>
+                </div>
+                
+                <!-- 错误提示 -->
+                <div id="viewerError" class="hidden absolute inset-0 flex items-center justify-center bg-black bg-opacity-75">
+                    <div class="text-center text-white">
+                        <i class="fas fa-exclamation-triangle text-4xl text-red-500 mb-4"></i>
+                        <p>无法加载图像</p>
+                        <p class="text-sm text-gray-400 mt-2">请确保已保存中间文件 (save_intermediate=true)</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 切片控制 -->
+            <div class="mt-4 grid grid-cols-3 gap-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">轴状位 (Axial)</label>
+                    <input type="range" id="axialSlider" min="0" max="100" value="50" class="w-full" oninput="updateSlice('axial', this.value)" disabled>
+                    <div class="text-xs text-gray-500 mt-1 text-center" id="axialValue">Slice: 50</div>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">冠状位 (Coronal)</label>
+                    <input type="range" id="coronalSlider" min="0" max="100" value="50" class="w-full" oninput="updateSlice('coronal', this.value)" disabled>
+                    <div class="text-xs text-gray-500 mt-1 text-center" id="coronalValue">Slice: 50</div>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">矢状位 (Sagittal)</label>
+                    <input type="range" id="sagittalSlider" min="0" max="100" value="50" class="w-full" oninput="updateSlice('sagittal', this.value)" disabled>
+                    <div class="text-xs text-gray-500 mt-1 text-center" id="sagittalValue">Slice: 50</div>
+                </div>
+            </div>
+            
+            <!-- 提示信息 -->
+            <div class="mt-4 p-3 bg-blue-50 border-l-4 border-blue-500 rounded">
+                <p class="text-sm text-blue-800">
+                    <i class="fas fa-info-circle mr-2"></i>
+                    <strong>使用说明：</strong>
+                    拖拽滑块查看不同切片 | 鼠标滚轮缩放 | 鼠标拖拽平移 | 点击"对比模式"并排查看
+                </p>
+            </div>
+        </div>
+
+        <!-- 技术细节（可折叠） -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <button onclick="toggleTechnicalDetails()" class="w-full flex items-center justify-between text-left">
+                <h2 class="text-xl font-semibold flex items-center">
+                    <i class="fas fa-code text-gray-500 mr-2"></i>
+                    技术细节
+                </h2>
+                <i id="technicalIcon" class="fas fa-chevron-down text-gray-400 transition-transform"></i>
+            </button>
+            
+            <div id="technicalDetails" class="hidden mt-4 space-y-3">
+                <div class="bg-gray-50 rounded p-4">
+                    <h3 class="font-semibold text-gray-700 mb-2">原始图像尺寸</h3>
+                    <div id="originalShape" class="text-gray-600 font-mono">-</div>
+                </div>
+                
+                <div class="bg-gray-50 rounded p-4">
+                    <h3 class="font-semibold text-gray-700 mb-2">MNI标准化后尺寸</h3>
+                    <div id="mniShape" class="text-gray-600 font-mono">-</div>
+                </div>
+                
+                <div class="bg-gray-50 rounded p-4">
+                    <h3 class="font-semibold text-gray-700 mb-2">输出文件路径</h3>
+                    <div id="outputFile" class="text-gray-600 font-mono text-sm break-all">-</div>
+                </div>
+                
+                <div class="bg-gray-50 rounded p-4">
+                    <h3 class="font-semibold text-gray-700 mb-2">脑掩膜路径</h3>
+                    <div id="brainMaskPath" class="text-gray-600 font-mono text-sm break-all">-</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 操作按钮 -->
+        <div class="flex gap-4">
+            <button onclick="window.location.href='/patients'" class="flex-1 bg-gray-500 hover:bg-gray-600 text-white font-semibold py-3 px-6 rounded-lg transition-colors">
+                <i class="fas fa-arrow-left mr-2"></i>返回患者列表
+            </button>
+            <button onclick="location.reload()" class="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3 px-6 rounded-lg transition-colors">
+                <i class="fas fa-sync-alt mr-2"></i>刷新报告
+            </button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<!-- Papaya NIfTI Viewer (本地部署) -->
+<script src="{{ url_for('static', filename='lib/papaya/papaya.js') }}"></script>
+<link rel="stylesheet" href="{{ url_for('static', filename='lib/papaya/papaya.css') }}">
+
+<script>
+// 从URL获取MRI扫描ID
+const urlParts = window.location.pathname.split('/');
+const mriScanId = urlParts[urlParts.length - 1];
+
+// 全局变量
+let currentImageType = 'original';
+let compareMode = false;
+let papayaContainers = [];
+let imagePaths = {
+    original: null,
+    preprocessed: null,
+    mask: null
+};
+
+// 页面加载时获取QC报告
+document.addEventListener('DOMContentLoaded', function() {
+    loadQCReport(mriScanId);
+});
+
+async function loadQCReport(scanId) {
+    try {
+        const response = await fetch(`/api/preprocessing/qc-report/${scanId}`);
+        const data = await response.json();
+        
+        if (!data.success) {
+            showError(data.error || '无法加载质量控制报告');
+            return;
+        }
+        
+        displayReport(data.qc_report);
+        
+        // 加载图像路径
+        await loadImagePaths(scanId, data.qc_report);
+        
+    } catch (error) {
+        console.error('加载QC报告失败:', error);
+        showError('网络请求失败: ' + error.message);
+    }
+}
+
+function displayReport(report) {
+    // 隐藏加载状态，显示报告内容
+    document.getElementById('loadingState').classList.add('hidden');
+    document.getElementById('reportContent').classList.remove('hidden');
+    
+    // 填充基本信息
+    document.getElementById('mriScanId').textContent = report.mri_scan_id;
+    document.getElementById('filename').textContent = report.filename;
+    
+    // 状态徽章
+    const statusEl = document.getElementById('status');
+    if (report.status === 'success') {
+        statusEl.innerHTML = '<span class="text-green-600"><i class="fas fa-check-circle"></i> 成功</span>';
+    } else if (report.status === 'failed') {
+        statusEl.innerHTML = '<span class="text-red-600"><i class="fas fa-times-circle"></i> 失败</span>';
+    } else {
+        statusEl.innerHTML = '<span class="text-yellow-600"><i class="fas fa-exclamation-triangle"></i> 未知</span>';
+    }
+    
+    // QC通过状态
+    const qcBadge = document.getElementById('qcPassedBadge');
+    if (report.qc_passed) {
+        qcBadge.className = 'px-6 py-3 rounded-full text-lg font-bold bg-green-100 text-green-800';
+        qcBadge.innerHTML = '<i class="fas fa-check-circle mr-2"></i>质量控制通过';
+    } else {
+        qcBadge.className = 'px-6 py-3 rounded-full text-lg font-bold bg-red-100 text-red-800';
+        qcBadge.innerHTML = '<i class="fas fa-exclamation-triangle mr-2"></i>质量控制警告';
+    }
+    
+    // SNR指标
+    const snr = report.snr;
+    document.getElementById('snrValue').textContent = snr ? snr.toFixed(2) : 'N/A';
+    if (snr) {
+        const snrPercent = Math.min((snr / 20) * 100, 100); // 假设20为满分
+        document.querySelector('#snrIndicator div').style.width = snrPercent + '%';
+    }
+    
+    // 脑体积
+    const volume = report.brain_volume_voxels;
+    document.getElementById('brainVolumeValue').textContent = volume ? volume.toLocaleString() : 'N/A';
+    
+    // 预处理步骤
+    const stepsList = document.getElementById('stepsList');
+    stepsList.innerHTML = '';
+    
+    const stepNames = {
+        'motion_correction': '头动校正与质量控制',
+        'intensity_normalization': '强度标准化',
+        'skull_stripping': '去颅骨处理',
+        'spatial_normalization': '空间标准化到MNI空间',
+        'spatial_smoothing': '空间平滑'
+    };
+    
+    const steps = report.steps_completed || [];
+    if (steps.length === 0) {
+        stepsList.innerHTML = '<p class="text-gray-500 italic">无步骤信息</p>';
+    } else {
+        steps.forEach((step, index) => {
+            const stepName = stepNames[step] || step;
+            const stepDiv = document.createElement('div');
+            stepDiv.className = 'flex items-center p-3 bg-green-50 border border-green-200 rounded-lg';
+            stepDiv.innerHTML = `
+                <i class="fas fa-check-circle text-green-500 mr-3"></i>
+                <span class="text-gray-800 font-medium">${index + 1}. ${stepName}</span>
+            `;
+            stepsList.appendChild(stepDiv);
+        });
+    }
+    
+    // 技术细节
+    document.getElementById('originalShape').textContent = report.original_shape ? JSON.stringify(report.original_shape) : '-';
+    document.getElementById('mniShape').textContent = report.mni_shape ? JSON.stringify(report.mni_shape) : '-';
+    document.getElementById('outputFile').textContent = report.output_file || '-';
+    document.getElementById('brainMaskPath').textContent = report.brain_mask_path || '-';
+    
+    // 如果有错误，显示错误信息
+    if (report.error) {
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'bg-red-50 border-l-4 border-red-500 p-4 rounded mt-4';
+        errorDiv.innerHTML = `
+            <h3 class="text-red-800 font-semibold mb-2">错误信息</h3>
+            <p class="text-red-700 text-sm">${report.error}</p>
+        `;
+        document.getElementById('reportContent').appendChild(errorDiv);
+    }
+}
+
+function showError(message) {
+    document.getElementById('loadingState').classList.add('hidden');
+    document.getElementById('errorState').classList.remove('hidden');
+    document.getElementById('errorMessage').textContent = message;
+}
+
+function toggleTechnicalDetails() {
+    const details = document.getElementById('technicalDetails');
+    const icon = document.getElementById('technicalIcon');
+    
+    if (details.classList.contains('hidden')) {
+        details.classList.remove('hidden');
+        icon.style.transform = 'rotate(180deg)';
+    } else {
+        details.classList.add('hidden');
+        icon.style.transform = 'rotate(0deg)';
+    }
+}
+
+// ========== 新增：MRI图像可视化功能 ==========
+
+/**
+ * 加载图像路径
+ */
+async function loadImagePaths(scanId, report) {
+    try {
+        // 从报告中提取文件路径
+        if (report.output_file) {
+            imagePaths.preprocessed = `/api/files/nifti?path=${encodeURIComponent(report.output_file)}`;
+        }
+        
+        if (report.brain_mask_path) {
+            imagePaths.mask = `/api/files/nifti?path=${encodeURIComponent(report.brain_mask_path)}`;
+            document.getElementById('btnMask').disabled = false;
+        }
+        
+        // 尝试获取原始文件路径（需要从数据库查询）
+        const mriResponse = await fetch(`/api/mri-scans/${scanId}`);
+        if (mriResponse.ok) {
+            const mriData = await mriResponse.json();
+            if (mriData.file_path) {
+                imagePaths.original = `/api/files/nifti?path=${encodeURIComponent(mriData.file_path)}`;
+            }
+        }
+        
+        // 默认显示原始图像
+        if (imagePaths.original) {
+            showImage('original');
+        } else if (imagePaths.preprocessed) {
+            showImage('preprocessed');
+        } else {
+            showViewerError();
+        }
+        
+    } catch (error) {
+        console.error('加载图像路径失败:', error);
+        showViewerError();
+    }
+}
+
+/**
+ * 显示指定类型的图像
+ */
+function showImage(type) {
+    currentImageType = type;
+    
+    // 更新按钮状态
+    document.getElementById('btnOriginal').classList.remove('ring-4', 'ring-blue-300');
+    document.getElementById('btnPreprocessed').classList.remove('ring-4', 'ring-green-300');
+    document.getElementById('btnMask').classList.remove('ring-4', 'ring-purple-300');
+    
+    if (type === 'original') {
+        document.getElementById('btnOriginal').classList.add('ring-4', 'ring-blue-300');
+    } else if (type === 'preprocessed') {
+        document.getElementById('btnPreprocessed').classList.add('ring-4', 'ring-green-300');
+    } else if (type === 'mask') {
+        document.getElementById('btnMask').classList.add('ring-4', 'ring-purple-300');
+    }
+    
+    // 初始化Papaya查看器
+    initPapayaViewer(type);
+}
+
+/**
+ * 初始化Papaya查看器
+ */
+function initPapayaViewer(imageType) {
+    const imagePath = imagePaths[imageType];
+    
+    if (!imagePath) {
+        showViewerError();
+        return;
+    }
+    
+    // 隐藏加载提示
+    document.getElementById('viewerLoading').style.display = 'none';
+    document.getElementById('viewerError').classList.add('hidden');
+    
+    // 配置参数
+    const params = [];
+    params["worldSpace"] = true;
+    params["smoothDisplay"] = true;
+    params["showControls"] = true;
+    params["showOrientation"] = true;
+    params["fullScreenPadding"] = false;
+    
+    // 如果是掩膜，使用不同的配色
+    if (imageType === 'mask') {
+        params["lut"] = "Red";
+        params["negativeLut"] = false;
+        params["min"] = 0.5;
+        params["max"] = 1.0;
+    }
+    
+    // 销毁旧查看器
+    if (papayaContainers.length > 0) {
+        papayaContainers.forEach(container => {
+            container.destroyViewer();
+        });
+        papayaContainers = [];
+    }
+    
+    // 创建新查看器
+    const viewerDiv = document.getElementById('papayaViewer');
+    viewerDiv.innerHTML = '';
+    
+    papayaContainers = [new papaya.Container(viewerDiv, [imagePath], params)];
+    
+    // 监听加载完成
+    papayaContainers[0].viewer.onImagesLoaded = function() {
+        console.log('✅ 图像加载完成');
+        enableSliceSliders();
+    };
+}
+
+/**
+ * 启用切片滑块
+ */
+function enableSliceSliders() {
+    const viewer = papayaContainers[0].viewer;
+    const dims = viewer.volumeHeader.dims;
+    
+    // 设置滑块范围
+    document.getElementById('axialSlider').max = dims.z - 1;
+    document.getElementById('coronalSlider').max = dims.y - 1;
+    document.getElementById('sagittalSlider').max = dims.x - 1;
+    
+    // 设置初始值为中间切片
+    const axialMid = Math.floor(dims.z / 2);
+    const coronalMid = Math.floor(dims.y / 2);
+    const sagittalMid = Math.floor(dims.x / 2);
+    
+    document.getElementById('axialSlider').value = axialMid;
+    document.getElementById('coronalSlider').value = coronalMid;
+    document.getElementById('sagittalSlider').value = sagittalMid;
+    
+    // 启用滑块
+    document.getElementById('axialSlider').disabled = false;
+    document.getElementById('coronalSlider').disabled = false;
+    document.getElementById('sagittalSlider').disabled = false;
+    
+    // 更新显示值
+    document.getElementById('axialValue').textContent = `Slice: ${axialMid}`;
+    document.getElementById('coronalValue').textContent = `Slice: ${coronalMid}`;
+    document.getElementById('sagittalValue').textContent = `Slice: ${sagittalMid}`;
+}
+
+/**
+ * 更新切片位置
+ */
+function updateSlice(plane, value) {
+    if (papayaContainers.length === 0) return;
+    
+    const viewer = papayaContainers[0].viewer;
+    value = parseInt(value);
+    
+    if (plane === 'axial') {
+        viewer.setCurrentCoord(null, null, value);
+        document.getElementById('axialValue').textContent = `Slice: ${value}`;
+    } else if (plane === 'coronal') {
+        viewer.setCurrentCoord(null, value, null);
+        document.getElementById('coronalValue').textContent = `Slice: ${value}`;
+    } else if (plane === 'sagittal') {
+        viewer.setCurrentCoord(value, null, null);
+        document.getElementById('sagittalValue').textContent = `Slice: ${value}`;
+    }
+}
+
+/**
+ * 切换对比模式
+ */
+function toggleCompareMode() {
+    compareMode = !compareMode;
+    const btn = document.getElementById('btnCompare');
+    
+    if (compareMode) {
+        btn.classList.add('ring-4', 'ring-orange-300');
+        showCompareView();
+    } else {
+        btn.classList.remove('ring-4', 'ring-orange-300');
+        showImage(currentImageType);
+    }
+}
+
+/**
+ * 显示对比视图（左右并排）
+ */
+function showCompareView() {
+    const viewerDiv = document.getElementById('papayaViewer');
+    viewerDiv.innerHTML = '';
+    viewerDiv.style.display = 'grid';
+    viewerDiv.style.gridTemplateColumns = '1fr 1fr';
+    viewerDiv.style.gap = '10px';
+    
+    // 创建两个查看器
+    const leftDiv = document.createElement('div');
+    leftDiv.id = 'leftViewer';
+    leftDiv.style.border = '1px solid #ccc';
+    
+    const rightDiv = document.createElement('div');
+    rightDiv.id = 'rightViewer';
+    rightDiv.style.border = '1px solid #ccc';
+    
+    viewerDiv.appendChild(leftDiv);
+    viewerDiv.appendChild(rightDiv);
+    
+    // 配置参数
+    const params = [
+        {"worldSpace": true, "smoothDisplay": true, "showControls": false},
+        {"worldSpace": true, "smoothDisplay": true, "showControls": false}
+    ];
+    
+    // 加载原始和预处理后的图像
+    const images = [
+        imagePaths.original || imagePaths.preprocessed,
+        imagePaths.preprocessed || imagePaths.original
+    ];
+    
+    papayaContainers = [
+        new papaya.Container(leftDiv, [images[0]], params[0]),
+        new papaya.Container(rightDiv, [images[1]], params[1])
+    ];
+    
+    // 同步两个查看器的切片位置
+    setTimeout(() => {
+        syncViewers();
+    }, 1000);
+}
+
+/**
+ * 同步两个查看器的切片位置
+ */
+function syncViewers() {
+    if (papayaContainers.length < 2) return;
+    
+    const viewer1 = papayaContainers[0].viewer;
+    const viewer2 = papayaContainers[1].viewer;
+    
+    // 监听第一个查看器的切片变化
+    viewer1.container.addEventListener('mousemove', function() {
+        const coord = viewer1.getCurrentCoord();
+        if (coord) {
+            viewer2.setCurrentCoord(coord.x, coord.y, coord.z);
+        }
+    });
+}
+
+/**
+ * 显示查看器错误
+ */
+function showViewerError() {
+    document.getElementById('viewerLoading').style.display = 'none';
+    document.getElementById('viewerError').classList.remove('hidden');
+}
+</script>
+{% endblock %}

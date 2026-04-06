@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from flask_migrate import Migrate
 
 from app import create_app, db
+from app.websocket_handler import socketio
 from config import DevelopmentConfig, config
 
 # 加载环境变量
@@ -56,6 +57,8 @@ def make_shell_context():
     }
 
 
+
+
 def setup_logging(app):
     """
     配置应用日志系统
@@ -67,33 +70,84 @@ def setup_logging(app):
     Args:
         app (Flask): Flask 应用实例，用于获取配置信息和设置 logger
     """
-    if app.debug:
-        logging.basicConfig(
-            level=logging.DEBUG,
-            format='%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
-        )
-        return
-
     # 创建日志目录
     log_dir = Path(app.config.get('LOG_FILE', 'logs/app.log')).parent
-    log_dir.mkdir(exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
 
-    # 配置日志轮转
-    handler = RotatingFileHandler(
+    if app.debug:
+        # 开发环境：控制台 + 文件输出
+        # 控制台处理器
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(logging.DEBUG)
+        console_formatter = logging.Formatter(
+            '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        console_handler.setFormatter(console_formatter)
+        app.logger.addHandler(console_handler)
+        
+        # 文件处理器（开发环境也记录到文件）
+        file_handler = RotatingFileHandler(
+            app.config.get('LOG_FILE', 'logs/app.log'),
+            maxBytes=app.config.get('LOG_MAX_BYTES', 10485760),
+            backupCount=app.config.get('LOG_BACKUP_COUNT', 10),
+            encoding='utf-8'
+        )
+        file_handler.setLevel(logging.DEBUG)
+        file_formatter = logging.Formatter(
+            '%(asctime)s %(levelname)s %(name)s: %(message)s [in %(pathname)s:%(lineno)d]',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        file_handler.setFormatter(file_formatter)
+        app.logger.addHandler(file_handler)
+        
+        app.logger.setLevel(logging.DEBUG)
+        app.logger.debug('ASD 预测系统启动（开发模式）')
+    else:
+        # 生产环境：仅文件输出，带日志轮转
+        handler = RotatingFileHandler(
+            app.config.get('LOG_FILE', 'logs/app.log'),
+            maxBytes=app.config.get('LOG_MAX_BYTES', 10485760),
+            backupCount=app.config.get('LOG_BACKUP_COUNT', 10),
+            encoding='utf-8'
+        )
+        handler.setLevel(logging.INFO)
+
+        formatter = logging.Formatter(
+            '%(asctime)s %(levelname)s %(name)s: %(message)s [in %(pathname)s:%(lineno)d]',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        handler.setFormatter(formatter)
+
+        app.logger.addHandler(handler)
+        app.logger.setLevel(logging.INFO)
+        app.logger.info('ASD 预测系统启动（生产模式）')
+    
+    # 配置根日志器，捕获所有模块的日志
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG if app.debug else logging.INFO)
+    
+    # 清除根日志器的默认处理器，避免重复输出
+    root_logger.handlers.clear()
+    
+    # 添加文件处理器到根日志器
+    root_file_handler = RotatingFileHandler(
         app.config.get('LOG_FILE', 'logs/app.log'),
         maxBytes=app.config.get('LOG_MAX_BYTES', 10485760),
-        backupCount=app.config.get('LOG_BACKUP_COUNT', 10)
+        backupCount=app.config.get('LOG_BACKUP_COUNT', 10),
+        encoding='utf-8'
     )
-    handler.setLevel(logging.INFO)
-
-    formatter = logging.Formatter(
-        '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
+    root_file_handler.setLevel(logging.DEBUG if app.debug else logging.INFO)
+    root_formatter = logging.Formatter(
+        '%(asctime)s %(levelname)s %(name)s.%(funcName)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
     )
-    handler.setFormatter(formatter)
-
-    app.logger.addHandler(handler)
-    app.logger.setLevel(logging.INFO)
-    app.logger.info('ASD 预测系统启动')
+    root_file_handler.setFormatter(root_formatter)
+    root_logger.addHandler(root_file_handler)
+    
+    # 抑制某些库的过多日志
+    logging.getLogger('werkzeug').setLevel(logging.WARNING)
+    logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING if not app.debug else logging.INFO)
 
 
 def initialize_app(app):
@@ -239,7 +293,7 @@ def verify_db_command():
 
 
 if __name__ == '__main__':
-    # 配置日志
+    # 配置日志（必须在应用创建后立即调用）
     setup_logging(app)
 
     # 初始化应用
@@ -253,12 +307,13 @@ if __name__ == '__main__':
     app.logger.info(f'服务器启动：http://{host}:{port}')
 
     try:
-        # 启动应用
-        app.run(
+        # 启动应用（使用socketio.run替代app.run）
+        socketio.run(
+            app,
             host=host,
             port=port,
             debug=debug,
-            threaded=True
+            use_reloader=False
         )
     except KeyboardInterrupt:
         app.logger.info('服务器已停止')

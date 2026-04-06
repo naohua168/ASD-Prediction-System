@@ -1,0 +1,504 @@
+<!-- 文件路径: E:\自闭症\ASD-Prediction-System\app\templates\upload_mri.html -->
+{% extends "base.html" %}
+
+{% block title %}上传MRI - ASD预测系统{% endblock %}
+
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+<style>
+    .upload-container {
+        max-width: 800px;
+        margin: 0 auto;
+    }
+    .upload-zone-large {
+        border: 3px dashed #d1d5db;
+        border-radius: 16px;
+        padding: 60px 40px;
+        text-align: center;
+        background: linear-gradient(135deg, #f9fafb 0%, #ffffff 100%);
+        cursor: pointer;
+        transition: all 0.3s;
+        margin-bottom: 30px;
+    }
+    .upload-zone-large:hover,
+    .upload-zone-large.dragover {
+        border-color: #2563eb;
+        background: linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%);
+        transform: scale(1.02);
+    }
+    .upload-icon-large {
+        font-size: 72px;
+        color: #2563eb;
+        margin-bottom: 20px;
+    }
+    .file-info {
+        background: #f9fafb;
+        padding: 20px;
+        border-radius: 12px;
+        margin-top: 20px;
+        display: none;
+    }
+    .file-info.show {
+        display: block;
+        animation: slideIn 0.3s ease;
+    }
+    @keyframes slideIn {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    .file-list {
+        margin-top: 20px;
+        max-height: 400px;
+        overflow-y: auto;
+    }
+    .file-item {
+        background: white;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 12px 16px;
+        margin-bottom: 8px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        transition: all 0.2s;
+    }
+    .file-item:hover {
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    .file-item.success {
+        border-left: 4px solid #10b981;
+    }
+    .file-item.failed {
+        border-left: 4px solid #ef4444;
+    }
+    .file-item.duplicate {
+        border-left: 4px solid #f59e0b;
+    }
+    .file-name {
+        font-weight: 500;
+        color: #1f2937;
+        flex: 1;
+    }
+    .file-status {
+        font-size: 12px;
+        padding: 4px 8px;
+        border-radius: 4px;
+        margin-left: 10px;
+    }
+    .file-status.pending {
+        background: #e5e7eb;
+        color: #6b7280;
+    }
+    .file-status.uploading {
+        background: #dbeafe;
+        color: #2563eb;
+    }
+    .file-status.success {
+        background: #d1fae5;
+        color: #065f46;
+    }
+    .file-status.failed {
+        background: #fee2e2;
+        color: #991b1b;
+    }
+    .file-status.duplicate {
+        background: #fef3c7;
+        color: #92400e;
+    }
+    .batch-summary {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 20px;
+        border-radius: 12px;
+        margin-top: 20px;
+        display: none;
+    }
+    .batch-summary.show {
+        display: block;
+        animation: slideIn 0.3s ease;
+    }
+    .summary-stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+        gap: 15px;
+        margin-top: 15px;
+    }
+    .stat-item {
+        text-align: center;
+        background: rgba(255,255,255,0.2);
+        padding: 10px;
+        border-radius: 8px;
+    }
+    .stat-value {
+        font-size: 24px;
+        font-weight: bold;
+    }
+    .stat-label {
+        font-size: 12px;
+        opacity: 0.9;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="dashboard-container upload-container">
+    <div class="panel">
+        <div class="panel-header">
+            <h3 class="panel-title">📤 上传MRI扫描文件</h3>
+            {% if request.args.get('patient_id') %}
+            <a href="{{ url_for('main.patient_detail', id=request.args.get('patient_id')) }}" class="brain-btn" style="background: #6b7280;">
+                返回
+            </a>
+            {% else %}
+            <a href="{{ url_for('main.patients') }}" class="brain-btn" style="background: #6b7280;">
+                返回
+            </a>
+            {% endif %}
+        </div>
+
+        <form method="POST" enctype="multipart/form-data" id="uploadForm">
+            {{ form.hidden_tag() }}
+
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 8px; font-weight: 600;">选择患者 *</label>
+                <select name="patient_id" required
+                        style="width: 100%; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; font-size: 14px;">
+                    <option value="">-- 请选择患者 --</option>
+                    {% for patient in patients %}
+                    <option value="{{ patient.id }}" {% if request.args.get('patient_id')|int == patient.id %}selected{% endif %}>
+                        {{ patient.name }} ({{ patient.patient_id }})
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 8px; font-weight: 600;">扫描类型</label>
+                {{ form.scan_type(class="form-control", style="width: 100%; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px;") }}
+            </div>
+
+            <div class="upload-zone-large" id="uploadZone">
+                <div class="upload-icon-large">🧠</div>
+                <h3 style="margin-bottom: 10px; color: #1f2937;">拖拽或点击上传 NIfTI 文件</h3>
+                <p style="color: #6b7280; margin-bottom: 15px;">支持格式: .nii, .nii.gz | 支持批量上传</p>
+                <p style="color: #9ca3af; font-size: 13px;">最大单文件大小: 500MB | 建议单次不超过20个文件</p>
+                <input type="file" id="fileInput" name="files" accept=".nii,.nii.gz" multiple 
+                       style="display: none;" onchange="handleFileSelect(this.files)">
+            </div>
+
+            <div id="fileList" class="file-list" style="display: none;">
+                <h4 style="margin-bottom: 15px; color: #1f2937;">
+                    <i class="fas fa-list"></i> 文件列表 (<span id="fileCount">0</span>)
+                </h4>
+                <div id="fileItems"></div>
+            </div>
+
+            <div id="batchSummary" class="batch-summary">
+                <h3 style="margin-bottom: 10px;"><i class="fas fa-chart-bar"></i> 上传结果汇总</h3>
+                <div class="summary-stats">
+                    <div class="stat-item">
+                        <div class="stat-value" id="statTotal">0</div>
+                        <div class="stat-label">总计</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="statSuccess">0</div>
+                        <div class="stat-label">成功</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="statFailed">0</div>
+                        <div class="stat-label">失败</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="statDuplicates">0</div>
+                        <div class="stat-label">重复</div>
+                    </div>
+                </div>
+                <div id="summaryMessage" style="margin-top: 15px; text-align: center;"></div>
+            </div>
+
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 8px; font-weight: 600;">备注（可选）</label>
+                {{ form.notes(class="form-control", rows=3, style="width: 100%; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; resize: vertical;") }}
+            </div>
+
+            <div id="uploadProgress" style="display: none; margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="font-weight: 600;">上传进度</span>
+                    <span id="progressText" style="color: #2563eb; font-weight: 600;">0%</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <button type="submit" class="brain-btn" style="width: 100%; padding: 15px; font-size: 16px;" id="submitBtn">
+                <i class="fas fa-upload"></i> 开始上传
+            </button>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let selectedFiles = [];
+
+const uploadZone = document.getElementById('uploadZone');
+
+// 点击上传区域触发文件选择
+uploadZone.addEventListener('click', () => {
+    document.getElementById('fileInput').click();
+});
+
+['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+    uploadZone.addEventListener(eventName, preventDefaults, false);
+});
+
+function preventDefaults(e) {
+    e.preventDefault();
+    e.stopPropagation();
+}
+
+['dragenter', 'dragover'].forEach(eventName => {
+    uploadZone.addEventListener(eventName, () => uploadZone.classList.add('dragover'), false);
+});
+
+['dragleave', 'drop'].forEach(eventName => {
+    uploadZone.addEventListener(eventName, () => uploadZone.classList.remove('dragover'), false);
+});
+
+uploadZone.addEventListener('drop', (e) => {
+    const dt = e.dataTransfer;
+    if (dt.files.length > 0) {
+        handleFileSelect(dt.files);
+    }
+});
+
+function handleFileSelect(files) {
+    if (!files || files.length === 0) return;
+
+    selectedFiles = Array.from(files).filter(file => {
+        if (!file.name.endsWith('.nii') && !file.name.endsWith('.nii.gz')) {
+            alert(`文件 "${file.name}" 不是有效的NIfTI格式`);
+            return false;
+        }
+        return true;
+    });
+
+    if (selectedFiles.length === 0) {
+        return;
+    }
+
+    displayFileList();
+}
+
+function displayFileList() {
+    const fileListDiv = document.getElementById('fileList');
+    const fileItemsDiv = document.getElementById('fileItems');
+    const fileCountSpan = document.getElementById('fileCount');
+
+    fileCountSpan.textContent = selectedFiles.length;
+    fileItemsDiv.innerHTML = '';
+
+    selectedFiles.forEach((file, index) => {
+        const fileItem = document.createElement('div');
+        fileItem.className = 'file-item';
+        fileItem.id = `file-item-${index}`;
+        fileItem.innerHTML = `
+            <div class="file-name">
+                <i class="fas fa-file-medical"></i> ${file.name}
+                <span style="color: #6b7280; font-size: 12px; margin-left: 8px;">
+                    (${formatFileSize(file.size)})
+                </span>
+            </div>
+            <span class="file-status pending" id="file-status-${index}">等待上传</span>
+        `;
+        fileItemsDiv.appendChild(fileItem);
+    });
+
+    fileListDiv.style.display = 'block';
+}
+
+function clearFiles() {
+    selectedFiles = [];
+    document.getElementById('fileInput').value = '';
+    document.getElementById('fileList').style.display = 'none';
+    document.getElementById('batchSummary').classList.remove('show');
+}
+
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+
+    if (selectedFiles.length === 0) {
+        alert('请先选择文件');
+        return;
+    }
+
+    const formData = new FormData();
+    const patientId = document.querySelector('select[name="patient_id"]').value;
+    const scanType = document.querySelector('select[name="scan_type"]').value;
+    const notes = document.querySelector('textarea[name="notes"]').value;
+
+    if (!patientId) {
+        alert('请选择患者');
+        return;
+    }
+
+    formData.append('patient_id', patientId);
+    formData.append('scan_type', scanType);
+    formData.append('notes', notes);
+
+    selectedFiles.forEach((file, index) => {
+        formData.append('files', file);
+        updateFileStatus(index, 'uploading', '上传中...');
+    });
+
+    const submitBtn = document.getElementById('submitBtn');
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 批量上传中...';
+
+    try {
+        const response = await fetch('{{ url_for("main.api_batch_upload_mri") }}', {
+            method: 'POST',
+            body: formData
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            displayBatchResults(result);
+            showNotification('success', result.message);
+        } else {
+            showNotification('error', result.error || '上传失败');
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="fas fa-upload"></i> 开始上传';
+        }
+    } catch (error) {
+        console.error('上传错误:', error);
+        showNotification('error', '网络错误，请重试');
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fas fa-upload"></i> 开始上传';
+    }
+});
+
+function updateFileStatus(index, status, message) {
+    const statusElement = document.getElementById(`file-status-${index}`);
+    const fileItem = document.getElementById(`file-item-${index}`);
+    
+    if (statusElement) {
+        statusElement.className = `file-status ${status}`;
+        statusElement.textContent = message;
+    }
+    
+    if (fileItem) {
+        fileItem.className = `file-item ${status}`;
+    }
+}
+
+function displayBatchResults(result) {
+    const summary = result.summary;
+    const results = result.results;
+
+    document.getElementById('statTotal').textContent = summary.total;
+    document.getElementById('statSuccess').textContent = summary.success_count;
+    document.getElementById('statFailed').textContent = summary.failed_count;
+    document.getElementById('statDuplicates').textContent = summary.duplicate_count;
+
+    let message = `成功上传 ${summary.success_count} 个文件`;
+    if (summary.duplicate_count > 0) {
+        message += `，检测到 ${summary.duplicate_count} 个重复文件`;
+    }
+    if (summary.failed_count > 0) {
+        message += `，${summary.failed_count} 个文件上传失败`;
+    }
+    document.getElementById('summaryMessage').textContent = message;
+
+    document.getElementById('batchSummary').classList.add('show');
+
+    results.success.forEach(item => {
+        const index = selectedFiles.findIndex(f => f.name === item.filename);
+        if (index !== -1) {
+            updateFileStatus(index, 'success', 
+                item.is_duplicate ? '✓ 重复' : '✓ 成功');
+        }
+    });
+
+    results.failed.forEach(item => {
+        const index = selectedFiles.findIndex(f => f.name === item.filename);
+        if (index !== -1) {
+            updateFileStatus(index, 'failed', `✗ ${item.error}`);
+        }
+    });
+
+    results.duplicates.forEach(item => {
+        const index = selectedFiles.findIndex(f => f.name === item.filename);
+        if (index !== -1) {
+            updateFileStatus(index, 'duplicate', 
+                `⚠ 重复 (节省${item.saved_space_kb}KB)`);
+        }
+    });
+
+    const submitBtn = document.getElementById('submitBtn');
+    submitBtn.disabled = false;
+    submitBtn.innerHTML = '<i class="fas fa-upload"></i> 继续上传';
+
+    setTimeout(() => {
+        const patientId = '{{ request.args.get("patient_id", "") }}';
+        if (patientId) {
+            window.location.href = '{{ url_for("main.patient_detail", id=0) }}'.replace('0', patientId);
+        }
+    }, 3000);
+}
+
+function showNotification(type, message) {
+    const notification = document.createElement('div');
+    notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        padding: 15px 25px;
+        border-radius: 8px;
+        color: white;
+        font-weight: 500;
+        z-index: 9999;
+        animation: slideInRight 0.3s ease;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    `;
+    
+    if (type === 'success') {
+        notification.style.background = 'linear-gradient(135deg, #10b981 0%, #059669 100%)';
+    } else {
+        notification.style.background = 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)';
+    }
+    
+    notification.textContent = message;
+    document.body.appendChild(notification);
+    
+    setTimeout(() => {
+        notification.style.animation = 'slideOutRight 0.3s ease';
+        setTimeout(() => notification.remove(), 300);
+    }, 3000);
+}
+
+const style = document.createElement('style');
+style.textContent = `
+    @keyframes slideInRight {
+        from { transform: translateX(400px); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
+    }
+    @keyframes slideOutRight {
+        from { transform: translateX(0); opacity: 1; }
+        to { transform: translateX(400px); opacity: 0; }
+    }
+`;
+document.head.appendChild(style);
+</script>
+{% endblock %}

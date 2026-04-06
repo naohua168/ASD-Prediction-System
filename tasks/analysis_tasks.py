@@ -1,0 +1,630 @@
+"""
+异步分析任务模块
+
+使用 Python threading 实现后台任务处理，替代 Celery 异步队列。
+支持任务状态跟踪和结果缓存。
+
+集成 TaskManager 实现并发控制和任务取消功能。
+"""
+import time
+import json
+import logging
+import threading
+from datetime import datetime
+from typing import Dict, Optional
+from app import db, create_app
+from app.models import MRIScan, Patient, AnalysisResult, User
+from app.websocket_handler import emit_task_progress, emit_task_completed, emit_task_failed
+from .task_manager import TaskManager
+
+logger = logging.getLogger(__name__)
+
+# 全局任务管理器（限制最大并发数为3）
+task_manager = TaskManager(max_concurrent=3)
+
+# 全局任务状态存储（生产环境建议使用 Redis）
+# 注意：现在主要由 task_manager 管理，保留此变量用于向后兼容
+task_status_store: Dict[str, dict] = {}
+
+
+class AnalysisTask:
+    """分析任务封装类"""
+
+    def __init__(self, task_id: str, mri_scan_id: int, patient_id: int, user_id: int):
+        self.task_id = task_id
+        self.mri_scan_id = mri_scan_id
+        self.patient_id = patient_id
+        self.user_id = user_id
+        self.status = 'pending'  # pending, running, completed, failed
+        self.progress = 0
+        self.result = None
+        self.error = None
+        self.started_at = None
+        self.completed_at = None
+
+    def to_dict(self) -> dict:
+        """转换为字典格式"""
+        return {
+            'task_id': self.task_id,
+            'mri_scan_id': self.mri_scan_id,
+            'patient_id': self.patient_id,
+            'status': self.status,
+            'progress': self.progress,
+            'result': self.result,
+            'error': self.error,
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None
+        }
+
+
+def _execute_analysis_task(task: AnalysisTask, model_id: Optional[str] = None, use_preprocessing: bool = False):
+    """
+    在后台线程中执行分析任务
+
+    Args:
+        task: 分析任务对象
+        model_id: 用户选择的模型ID（可选），如 'MinMaxScaler+PCA+SVM_Optuna_fold5_iter1'
+        use_preprocessing: 是否使用预处理流水线（默认False，保持向后兼容）
+    """
+    app = create_app()
+
+    with app.app_context():
+        try:
+            # 检查任务是否被取消
+            managed_task = task_manager.get_task(task.task_id)
+            if managed_task and managed_task.is_cancelled():
+                logger.info(f"任务 {task.task_id} 已被取消，停止执行")
+                task.status = 'cancelled'
+                task.completed_at = datetime.utcnow()
+                return
+            
+            task.status = 'running'
+            task.started_at = datetime.utcnow()
+            task.progress = 10
+            
+            # 更新 ManagedTask 状态
+            if managed_task:
+                managed_task.mark_running()
+            
+            emit_task_progress(task.task_id, 10, 'running', '初始化分析任务...')
+            logger.info(f"开始分析任务: {task.task_id}, MRI={task.mri_scan_id}, Model={model_id}")
+
+            # 查询数据
+            mri_scan = MRIScan.query.get(task.mri_scan_id)
+            patient = Patient.query.get(task.patient_id)
+            user = User.query.get(task.user_id)
+
+            if not mri_scan or not patient:
+                raise ValueError('MRI扫描或患者不存在')
+
+            if not mri_scan.file_path:
+                raise ValueError('MRI文件路径不存在')
+            
+            # 在执行过程中定期检查取消标志
+            if managed_task and managed_task.is_cancelled():
+                logger.info(f"任务 {task.task_id} 在执行中被取消")
+                task.status = 'cancelled'
+                task.completed_at = datetime.utcnow()
+                if managed_task:
+                    managed_task.mark_completed()
+                return
+
+            task.progress = 20
+            emit_task_progress(task.task_id, 20, 'running', '加载MRI数据...')
+
+            # ========== 新增：MRI预处理（可选） ==========
+            mri_file_path = mri_scan.file_path
+            
+            if use_preprocessing:
+                logger.info(f"启用预处理流水线: {mri_file_path}")
+                task.progress = 25
+                emit_task_progress(task.task_id, 25, 'running', '执行MRI预处理...')
+                
+                try:
+                    from ml_core.prepare_data_wrapper import preprocess_mri_file
+                    
+                    # 执行预处理（保存中间文件用于可视化）
+                    preprocess_result = preprocess_mri_file(
+                        input_file=mri_file_path,
+                        subject_id=f"patient_{patient.id}",
+                        scan_id=str(mri_scan.id),
+                        save_intermediate=True  # ✅ 保存中间文件，支持可视化
+                    )
+                    
+                    if preprocess_result['status'] == 'success':
+                        # 使用预处理后的文件
+                        mri_file_path = preprocess_result['output_file']
+                        logger.info(f"✅ 预处理完成: {mri_file_path}")
+                        
+                        # 记录预处理信息（包含中间文件路径）
+                        task.preprocess_info = {
+                            'qc_passed': preprocess_result.get('qc_passed', False),
+                            'snr': preprocess_result.get('snr', None),
+                            'brain_volume_voxels': preprocess_result.get('brain_volume_voxels', None),
+                            'steps_completed': preprocess_result.get('steps_completed', []),
+                            'output_file': preprocess_result.get('output_file'),  # 预处理后文件
+                            'brain_mask_path': preprocess_result.get('brain_mask_path'),  # 脑掩膜文件
+                            'original_shape': preprocess_result.get('original_shape'),
+                            'mni_shape': preprocess_result.get('mni_shape'),
+                            'status': 'success'
+                        }
+                        
+                        task.progress = 30
+                        emit_task_progress(task.task_id, 30, 'running', '预处理完成，准备分析...')
+                    else:
+                        # 预处理失败，回退到原始文件
+                        logger.warning(f"⚠️ 预处理失败: {preprocess_result.get('error')}，使用原始文件")
+                        mri_file_path = mri_scan.file_path
+                        task.preprocess_info = {
+                            'status': 'failed', 
+                            'error': preprocess_result.get('error'),
+                            'steps_completed': preprocess_result.get('steps_completed', [])
+                        }
+                
+                except Exception as e:
+                    logger.error(f"❌ 预处理异常: {e}，使用原始文件", exc_info=True)
+                    mri_file_path = mri_scan.file_path
+                    task.preprocess_info = {'status': 'error', 'error': str(e)}
+            else:
+                logger.info(f"使用原始MRI文件: {mri_file_path}")
+            # ==========================================
+
+            logger.info(f"准备分析 MRI 文件: {mri_file_path}")
+            task.progress = 30
+            emit_task_progress(task.task_id, 30, 'running', '初始化预测服务...')
+
+            # ========== 使用预测服务进行多模型支持 ==========
+            from ml_core.prediction_service import ASDPredictionService
+            
+            service = ASDPredictionService()
+            
+            if model_id:
+                # 使用用户指定的模型
+                logger.info(f"使用指定模型: {model_id}")
+                service.select_model(model_id)
+                task.progress = 40
+                emit_task_progress(task.task_id, 40, 'running', f'加载模型: {model_id}...')
+            else:
+                # 使用性能最好的模型
+                logger.info("未指定模型，使用推荐模型")
+                recommended = service.registry.get_recommended_model()
+                if recommended:
+                    service.select_model(recommended['id'])
+                    logger.info(f"使用推荐模型: {recommended['id']}")
+                    task.progress = 40
+                    emit_task_progress(task.task_id, 40, 'running', f'加载推荐模型: {recommended["name"]}...')
+                else:
+                    raise RuntimeError("没有可用的训练模型，请先运行训练脚本生成模型")
+            
+            # 执行预测
+            logger.info(f"开始处理 MRI 文件: {mri_file_path}")
+            task.progress = 60
+            emit_task_progress(task.task_id, 60, 'running', '提取脑部特征并预测...')
+            
+            # 使用 predict_from_mri_file 获取完整的预测结果和脑区数据
+            prediction_result = service.predict_from_mri_file(mri_file_path)
+            task.progress = 90
+            emit_task_progress(task.task_id, 90, 'running', '生成分析报告...')
+            
+            # 获取模型元数据
+            model_metadata = service.model_metadata
+            
+            # 准备特征使用情况
+            features_used = {
+                'extraction_method': 'brain_mask_based',
+                'mask_path': model_metadata.get('mask_path', 'N/A'),
+                'model_name': model_metadata.get('model_name', prediction_result.get('model_used', 'Unknown')),
+                'model_type': model_metadata.get('model_type', 'Nested_CV'),
+                'preprocessing_pipeline': 'full_pipeline' if use_preprocessing else 'none (using original file)',
+                'preprocess_applied': use_preprocessing,
+                'preprocess_info': getattr(task, 'preprocess_info', None),
+                'brain_region_contributions': prediction_result.get('brain_region_contributions', {}),
+                # 新增：保存完整的脑区统计数据（用于可视化）
+                'region_values': prediction_result.get('region_values', {}),
+                'feature_names': prediction_result.get('feature_names', [])
+            }
+            
+            # 准备评估指标（从模型元数据中获取）
+            model_metrics_data = model_metadata.get('metrics', {})
+            metrics = {
+                'accuracy': model_metrics_data.get('accuracy', 0.85),
+                'sensitivity': model_metrics_data.get('sensitivity', 0.82),
+                'specificity': model_metrics_data.get('specificity', 0.88),
+                'auc': model_metrics_data.get('auc', 0.90),
+                'model_version': prediction_result.get('model_used', 'v1.0.0'),
+                'training_date': model_metadata.get('training_date', 'N/A'),
+                'kFold': model_metadata.get('kFold', 5),
+                'n_samples': model_metadata.get('n_samples', 0)
+            }
+            logger.info(f"使用模型指标 - 准确率: {metrics['accuracy']:.4f}, AUC: {metrics['auc']:.4f}")
+            # 创建分析结果记录
+            result = AnalysisResult(
+                patient_id=task.patient_id,
+                mri_scan_id=task.mri_scan_id,
+                prediction=prediction_result['prediction'],
+                probability=prediction_result['probability'],
+                confidence=prediction_result['confidence'],
+                model_version=prediction_result.get('model_used', 'v1.0.0'),
+                features_used=json.dumps(features_used, ensure_ascii=False),
+                metrics=json.dumps(metrics, ensure_ascii=False),
+                analyzed_by=task.user_id
+            )
+
+            db.session.add(result)
+            db.session.commit()
+            task.progress = 100
+
+            logger.info(
+                f"分析完成: Task ID={task.task_id}, Result ID={result.id}, "
+                f"Prediction={prediction_result['prediction']}, "
+                f"Probability={prediction_result['probability']:.4f}"
+            )
+            
+            # 记录系统日志
+            try:
+                from app.models import SystemLog
+                log_entry = SystemLog(
+                    user_id=task.user_id,
+                    action='ANALYSIS_COMPLETED',
+                    description=f'分析完成: 患者ID={task.patient_id}, 结果={prediction_result["prediction"]}, 概率={prediction_result["probability"]:.2%}',
+                    ip_address=None  # 后台任务无IP地址
+                )
+                db.session.add(log_entry)
+                db.session.commit()
+            except Exception as log_error:
+                logger.error(f'记录分析完成日志失败: {log_error}')
+
+            task.status = 'completed'
+            task.completed_at = datetime.utcnow()
+            task.result = {
+                'result_id': result.id,
+                'prediction': prediction_result['prediction'],
+                'probability': prediction_result['probability'],
+                'confidence': prediction_result['confidence']
+            }
+            
+            # 更新 ManagedTask 状态
+            if managed_task:
+                managed_task.mark_completed()
+
+            # WebSocket推送完成通知
+            result_url = f'/analysis/report/{result.id}'
+            emit_task_completed(task.task_id, result_url)
+
+        except Exception as e:
+            db.session.rollback()
+            task.status = 'failed'
+            task.completed_at = datetime.utcnow()
+            task.error = str(e)
+            logger.error(f"分析任务失败: {task.task_id}, 错误: {e}", exc_info=True)
+            
+            # 更新 ManagedTask 状态
+            if managed_task:
+                managed_task.mark_failed()
+
+            # WebSocket推送失败通知
+            emit_task_failed(task.task_id, str(e))
+            raise
+
+def submit_analysis_task(
+    mri_scan_id: int, 
+    patient_id: int, 
+    user_id: int,
+    model_id: str = None,  # 新增参数：用户选择的模型ID
+    use_preprocessing: bool = False  # 新增参数：是否使用预处理
+) -> str:
+    """
+    提交分析任务（使用后台线程）
+    
+    Args:
+        mri_scan_id: MRI扫描记录ID
+        patient_id: 患者ID
+        user_id: 用户ID
+        model_id: 可选，指定的模型ID，如果不提供则使用默认模型
+        use_preprocessing: 可选，是否使用预处理流水线（默认False）
+    
+    Returns:
+        task_id: 任务ID
+    
+    Raises:
+        RuntimeError: 如果达到最大并发任务数
+    """
+    import uuid
+    
+    # 检查是否可以启动新任务
+    if not task_manager.can_start_task():
+        running_count = task_manager.get_running_count()
+        raise RuntimeError(
+            f"系统繁忙，当前有 {running_count} 个任务正在运行。"
+            f"最大并发任务数为 {task_manager.max_concurrent}，请稍后重试。"
+        )
+    
+    # 生成唯一任务ID
+    task_id = str(uuid.uuid4())
+    
+    # 创建任务对象
+    task = AnalysisTask(
+        task_id=task_id,
+        mri_scan_id=mri_scan_id,
+        patient_id=patient_id,
+        user_id=user_id
+    )
+    
+    # 添加到任务管理器
+    managed_task = task_manager.add_task(task_id)
+    
+    # 存储任务状态（向后兼容）
+    task_status_store[task_id] = task
+    
+    # 启动后台线程执行任务
+    thread = threading.Thread(
+        target=_execute_analysis_task,
+        args=(task, model_id, use_preprocessing),
+        daemon=True
+    )
+    
+    # 关联线程到 ManagedTask
+    managed_task.thread = thread
+    
+    thread.start()
+    
+    logger.info(f"分析任务已提交: {task_id}, Model={model_id}")
+    
+    return task_id
+
+def get_task_status(task_id: str) -> Optional[dict]:
+    """
+    获取任务状态
+
+    Args:
+        task_id: 任务ID
+
+    Returns:
+        dict: 任务状态信息，如果任务不存在返回 None
+    """
+    task = task_status_store.get(task_id)
+    if task:
+        return task.to_dict()
+    return None
+
+
+def get_all_tasks() -> list:
+    """
+    获取所有任务状态
+
+    Returns:
+        list: 所有任务的状态列表
+    """
+    return [task.to_dict() for task in task_status_store.values()]
+
+
+def cleanup_completed_tasks(max_age_hours: int = 24):
+    """
+    清理已完成的任务记录
+
+    Args:
+        max_age_hours: 保留最近多少小时的任务，默认24小时
+    """
+    # 使用 TaskManager 的清理方法
+    task_manager.cleanup_completed_tasks(max_age_hours)
+    
+    # 同时清理旧的 task_status_store（向后兼容）
+    from datetime import timedelta
+    cutoff_time = datetime.utcnow() - timedelta(hours=max_age_hours)
+
+    tasks_to_remove = [
+        task_id for task_id, task in task_status_store.items()
+        if task.completed_at and task.completed_at < cutoff_time
+    ]
+
+    for task_id in tasks_to_remove:
+        del task_status_store[task_id]
+
+    if tasks_to_remove:
+        logger.info(f"已清理 {len(tasks_to_remove)} 个过期任务（旧存储）")
+
+
+def cancel_task(task_id: str) -> bool:
+    """
+    取消正在运行的任务
+    
+    Args:
+        task_id: 任务ID
+    
+    Returns:
+        bool: True 如果成功取消，False 如果任务不存在或无法取消
+    """
+    # 尝试通过 TaskManager 取消
+    success = task_manager.cancel_task(task_id)
+    
+    if success:
+        # 同步更新 AnalysisTask 状态
+        task = task_status_store.get(task_id)
+        if task:
+            task.status = 'cancelled'
+            task.completed_at = datetime.utcnow()
+            task.error = '用户取消了任务'
+        
+        logger.info(f"任务 {task_id} 已被取消")
+    else:
+        logger.warning(f"无法取消任务 {task_id}（可能不存在或已完成）")
+    
+    return success
+
+
+def get_task_manager_stats() -> dict:
+    """
+    获取任务管理器统计信息
+    
+    Returns:
+        dict: 包含各种状态的任务数量
+    """
+    return task_manager.get_stats()
+
+
+def run_preprocessing_task(
+    task_id: str,
+    mri_scan_id: int,
+    patient_id: int,
+    user_id: int,
+    config: dict = None,
+    save_intermediate: bool = False
+):
+    """
+    执行独立的MRI预处理任务（后台线程）
+    
+    Args:
+        task_id: 任务ID
+        mri_scan_id: MRI扫描记录ID
+        patient_id: 患者ID
+        user_id: 用户ID
+        config: 预处理配置参数
+        save_intermediate: 是否保存中间结果
+    """
+    app = create_app()
+    
+    with app.app_context():
+        try:
+            # 检查任务是否被取消
+            managed_task = task_manager.get_task(task_id)
+            if managed_task and managed_task.is_cancelled():
+                logger.info(f"预处理任务 {task_id} 已被取消")
+                return
+            
+            # 更新任务状态
+            from app.models import AnalysisTask as AnalysisTaskModel
+            task = AnalysisTaskModel.query.filter_by(task_id=task_id).first()
+            if not task:
+                logger.error(f"找不到任务记录: {task_id}")
+                return
+            
+            task.status = 'running'
+            task.progress = 10
+            task.started_at = datetime.utcnow()
+            db.session.commit()
+            
+            if managed_task:
+                managed_task.mark_running()
+            
+            emit_task_progress(task_id, 10, 'running', '开始MRI预处理...')
+            logger.info(f"🔄 开始预处理任务: {task_id}, MRI={mri_scan_id}")
+            
+            # 获取MRI扫描和患者信息
+            mri_scan = MRIScan.query.get(mri_scan_id)
+            patient = Patient.query.get(patient_id)
+            
+            if not mri_scan or not patient:
+                raise ValueError('MRI扫描或患者不存在')
+            
+            if not mri_scan.file_path:
+                raise ValueError('MRI文件路径不存在')
+            
+            # 检查取消标志
+            if managed_task and managed_task.is_cancelled():
+                logger.info(f"预处理任务 {task_id} 在执行中被取消")
+                task.status = 'cancelled'
+                task.completed_at = datetime.utcnow()
+                db.session.commit()
+                return
+            
+            task.progress = 20
+            emit_task_progress(task_id, 20, 'running', '加载MRI数据...')
+            
+            # 执行预处理
+            from ml_core.prepare_data_wrapper import preprocess_mri_file
+            
+            logger.info(f"启用自定义配置: {config}")
+            task.progress = 30
+            emit_task_progress(task_id, 30, 'running', '执行预处理流水线...')
+            
+            preprocess_result = preprocess_mri_file(
+                input_file=mri_scan.file_path,
+                subject_id=f"patient_{patient.id}",
+                scan_id=str(mri_scan.id),
+                config=config,
+                save_intermediate=save_intermediate
+            )
+            
+            # 检查取消标志
+            if managed_task and managed_task.is_cancelled():
+                logger.info(f"预处理任务 {task_id} 在处理中被取消")
+                task.status = 'cancelled'
+                task.completed_at = datetime.utcnow()
+                db.session.commit()
+                return
+            
+            if preprocess_result['status'] == 'success':
+                logger.info(f"✅ 预处理完成: {preprocess_result['output_file']}")
+                
+                # 记录预处理信息到任务
+                task.preprocess_info = {
+                    'qc_passed': preprocess_result.get('qc_passed', False),
+                    'snr': preprocess_result.get('snr', None),
+                    'brain_volume_voxels': preprocess_result.get('brain_volume_voxels', None),
+                    'steps_completed': preprocess_result.get('steps_completed', []),
+                    'output_file': preprocess_result.get('output_file'),
+                    'brain_mask_path': preprocess_result.get('brain_mask_path'),
+                    'original_shape': preprocess_result.get('original_shape'),
+                    'mni_shape': preprocess_result.get('mni_shape'),
+                    'status': 'success'
+                }
+                
+                task.progress = 90
+                emit_task_progress(task_id, 90, 'running', '预处理完成，保存结果...')
+                
+                # 完成任务
+                task.status = 'completed'
+                task.progress = 100
+                task.completed_at = datetime.utcnow()
+                task.result = {
+                    'output_file': preprocess_result['output_file'],
+                    'qc_passed': preprocess_result.get('qc_passed', False),
+                    'snr': preprocess_result.get('snr'),
+                    'brain_volume_voxels': preprocess_result.get('brain_volume_voxels')
+                }
+                
+                db.session.commit()
+                
+                if managed_task:
+                    managed_task.mark_completed()
+                
+                # WebSocket推送完成通知
+                emit_task_completed(task_id, f'/preprocessing/qc-report/{mri_scan_id}')
+                
+                logger.info(f"✅ 预处理任务完成: {task_id}")
+            else:
+                # 预处理失败
+                error_msg = preprocess_result.get('error', '未知错误')
+                logger.error(f"❌ 预处理失败: {error_msg}")
+                
+                task.status = 'failed'
+                task.completed_at = datetime.utcnow()
+                task.error = error_msg
+                task.preprocess_info = {
+                    'status': 'failed',
+                    'error': error_msg,
+                    'steps_completed': preprocess_result.get('steps_completed', [])
+                }
+                
+                db.session.commit()
+                
+                if managed_task:
+                    managed_task.mark_failed()
+                
+                emit_task_failed(task_id, error_msg)
+        
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"❌ 预处理任务异常: {e}", exc_info=True)
+            
+            task.status = 'failed'
+            task.completed_at = datetime.utcnow()
+            task.error = str(e)
+            
+            db.session.commit()
+            
+            if managed_task:
+                managed_task.mark_failed()
+            
+            emit_task_failed(task_id, str(e))
+            raise

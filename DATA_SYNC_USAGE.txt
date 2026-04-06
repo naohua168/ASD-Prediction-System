@@ -1,0 +1,195 @@
+========================================
+ASD预测系统 - 数据同步工具使用指南
+========================================
+
+一、问题修复说明
+-----------------
+本次更新解决了以下两个核心问题：
+
+1. ✓ 外键约束处理不完善
+   - 新增 ForeignKeyAnalyzer 自动分析表间依赖关系
+   - 使用拓扑排序确保正确的导入/导出顺序
+   - 避免外键约束冲突
+
+2. ✓ 冲突解决策略缺失
+   - 实现4种冲突解决策略：skip、update、overwrite、merge
+   - 支持批量插入和批量更新操作
+   - 提供详细的导入统计信息
+
+
+二、新增文件清单
+-----------------
+1. data_sync/foreign_key_analyzer.py    - 外键依赖分析器
+2. test_sync_quick.py                   - 快速测试脚本
+
+
+三、修改文件清单
+-----------------
+1. data_sync/exporter.py                - 重写为完整的数据导出器
+2. data_sync/importer.py                - 增强导入器，添加冲突解决
+3. data_sync/sync_tool.py               - 已包含json导入（无需修改）
+
+
+四、使用方法
+------------
+
+【1】导出数据
+
+进入项目根目录后执行：
+    cd E:\自闭症\ASD-Prediction-System
+    python -m data_sync.sync_tool export --package
+
+输出示例：
+    [2026-04-06 XX:XX:XX] [INFO] === 开始创建同步包 ===
+    [2026-04-06 XX:XX:XX] [INFO] 开始导出表: users
+    [2026-04-06 XX:XX:XX] [INFO] 导出完成: users - 5 条记录 -> data_sync\exports\users_20260406_XXXXXX.json
+    ...
+    [2026-04-06 XX:XX:XX] [INFO] 同步包创建完成: data_sync\exports\manifest.json
+    [2026-04-06 XX:XX:XX] [INFO] 包含 6 个表
+
+
+【2】导入数据（不同冲突策略）
+
+策略说明：
+  - skip（默认）:     跳过已存在的记录，只导入新记录
+  - update:           更新已存在的记录
+  - overwrite:        完全覆盖已存在的记录（谨慎使用！）
+  - merge:            智能合并（新数据的非空值覆盖旧数据）
+
+命令示例：
+
+A. 导入最新同步包（使用默认的 skip 策略）
+    python -m data_sync.sync_tool import
+
+B. 使用 update 策略
+    python -m data_sync.sync_tool import --strategy update
+
+C. 使用 overwrite 策略
+    python -m data_sync.sync_tool import --strategy overwrite
+
+D. 使用 merge 策略
+    python -m data_sync.sync_tool import --strategy merge
+
+E. 导入指定的同步包
+    python -m data_sync.sync_tool import --package data_sync\imports\manifest.json --strategy merge
+
+输出示例：
+    [2026-04-06 XX:XX:XX] [INFO] 根据外键依赖分析的导入顺序: users, patients, mri_scans, ...
+    [2026-04-06 XX:XX:XX] [INFO] 表 users 冲突解决结果:
+    [2026-04-06 XX:XX:XX] [INFO]   - 新增: 0 条
+    [2026-04-06 XX:XX:XX] [INFO]   - 更新: 2 条
+    [2026-04-06 XX:XX:XX] [INFO]   - 跳过: 3 条
+    [2026-04-06 XX:XX:XX] [INFO] 表 users 导入成功
+    ...
+    [2026-04-06 XX:XX:XX] [INFO] === 同步包导入完成 ===
+    [2026-04-06 XX:XX:XX] [INFO] 统计信息:
+    [2026-04-06 XX:XX:XX] [INFO]   - 新增记录: 15
+    [2026-04-06 XX:XX:XX] [INFO]   - 更新记录: 8
+    [2026-04-06 XX:XX:XX] [INFO]   - 跳过记录: 12
+    [2026-04-06 XX:XX:XX] [INFO]   - 失败记录: 0
+
+
+【3】运行测试验证功能
+
+    python test_sync_quick.py
+
+测试内容：
+  - 外键依赖分析器功能
+  - 冲突解决器功能
+  - 数据导出功能
+
+
+五、技术细节
+------------
+
+【外键依赖分析】
+系统会自动查询数据库的外键关系，构建依赖图，然后：
+  - 导出时：从父表到子表（先导出被依赖的表）
+  - 导入时：从子表到父表（先导入无依赖的表）
+
+例如：
+  users (无依赖)
+    ↓
+  patients (依赖 users)
+    ↓
+  mri_scans (依赖 patients, users)
+    ↓
+  analysis_results (依赖 patients, mri_scans, users)
+
+【冲突解决策略详解】
+
+1. SKIP 策略（推荐用于增量同步）
+   场景：目标库已有部分数据，只需要同步新数据
+   行为：如果记录已存在（主键相同），则跳过
+
+2. UPDATE 策略（推荐用于数据更新）
+   场景：需要更新目标库中的现有数据
+   行为：如果记录已存在，则用新数据完全替换
+
+3. OVERWRITE 策略（谨慎使用！）
+   场景：完全重建目标库
+   行为：先清空表，再导入所有数据（最快但会丢失目标库独有数据）
+
+4. MERGE 策略（推荐用于多源数据整合）
+   场景：多个来源的数据需要合并
+   行为：对于已存在的记录，用新数据的非空值覆盖旧数据
+
+
+六、常见问题
+------------
+
+Q1: 导入时报外键约束错误？
+A1: 系统已自动处理外键依赖顺序，如仍报错请检查：
+    - 数据库连接是否正常
+    - 导出的数据是否完整
+    - 查看日志中的导入顺序是否正确
+
+Q2: 如何选择冲突解决策略？
+A2: 
+    - 首次导入或完全同步 → 使用 overwrite
+    - 增量同步新数据 → 使用 skip（默认）
+    - 更新现有数据 → 使用 update
+    - 合并多方数据 → 使用 merge
+
+Q3: 导入速度慢怎么办？
+A3: 
+    - 调整 batch_size 配置（在 sync_config.ini 中）
+    - 使用 overwrite 策略（跳过冲突检测）
+    - 确保数据库服务器性能充足
+
+Q4: 如何验证导入是否成功？
+A4: 
+    - 查看导入完成后的统计信息
+    - 运行：python data_sync\exporter.py （验证数据库）
+    - 登录系统检查数据是否正确
+
+
+七、配置文件
+------------
+
+配置文件位置：sync_config.ini
+
+主要配置项：
+[DATABASE]
+host = localhost
+port = 3306
+user = asd_user
+password = SecurePass123!
+database = asd_prediction
+charset = utf8mb4
+
+[SYNC]
+tables = users,patients,mri_scans,analysis_results,clinical_scores,system_logs
+exclude_tables = 
+batch_size = 1000
+
+
+八、联系与支持
+--------------
+
+如有问题，请查看日志输出或联系系统管理员。
+
+========================================
+更新日期：2026-04-06
+版本：v2.0
+========================================
