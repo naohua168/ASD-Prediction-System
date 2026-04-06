@@ -46,7 +46,12 @@ class DevelopmentConfig(Config):
 
 class TestingConfig(Config):
     TESTING = True
-    SQLALCHEMY_DATABASE_URI = 'mysql+pymysql://asd_user:SecurePass123!@localhost/test_asd_prediction'
+    # 使用SQLite进行单元测试，无需MySQL连接
+    SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
+    # SQLite不支持连接池，需要移除这些参数
+    SQLALCHEMY_POOL_SIZE = None
+    SQLALCHEMY_POOL_RECYCLE = None
     WTF_CSRF_ENABLED = False
 
 
