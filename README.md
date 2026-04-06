@@ -40,7 +40,7 @@
 
 - 前端：HTML5、Bootstrap、JavaScript、Three\.js
 
-- 后端：Python、Flask、Celery、Redis
+- 后端：Python、Flask、threading 异步任务
 
 - 数据库：MySQL
 
@@ -62,7 +62,7 @@
 
 5. 多中心数据交叉验证
 
-6. 异步任务处理与分析任务调度
+6. 后台任务处理与分析任务调度
 
 ---
 
@@ -73,11 +73,11 @@
 |模块|技术|
 |后端框架|Flask|
 |数据库|MySQL|
-|任务队列|Celery \+ Redis|
-|机器学习|Scikit\-learn, NiBabel|
-|可视化|Three\.js, Chart\.js|
-|数据库迁移|Flask\-Migrate|
-|环境管理|Conda \+ \.env|
+|异步任务|Python threading|
+|机器学习|Scikit-learn, NiBabel|
+|可视化|Three.js, Chart.js|
+|数据库迁移|Flask-Migrate|
+|环境管理|Conda + .env|
 
 ---
 
@@ -109,17 +109,14 @@ DB_NAME=asd_prediction
 SECRET_KEY=your_secret_key
 ```
 
-### 5\.4 启动服务
+### 5.4 启动服务
 
 ```bash
 # 初始化数据库
 flask db upgrade
 
-# 启动主程序
+# 启动主程序（内置异步任务支持）
 python run.py
-
-# 启动异步任务
-celery -A tasks.analysis_tasks.celery worker --loglevel=info
 ```
 
 ---

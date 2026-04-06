@@ -1,0 +1,412 @@
+{% extends "base.html" %}
+
+{% block title %}ASD 预测系统 - 医疗专业仪表盘{% endblock %}
+
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+<script src="https://cdn.jsdelivr.net/npm/three@0.150.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.2.1/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="dashboard-container">
+    <div class="dashboard-header">
+        <h1>🧠 ASD 预测分析系统</h1>
+        <p>基于结构磁共振成像的自闭症谱系障碍智能诊断平台</p>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-label">总患者数</div>
+            <div class="stat-value">{{ total_patients or 0 }}</div>
+            <div class="stat-change">↑ 本月新增 {{ new_patients or 0 }}</div>
+        </div>
+        <div class="stat-card warning">
+            <div class="stat-label">ASD 阳性率</div>
+            <div class="stat-value">{{ asd_rate or '0%' }}</div>
+            <div class="stat-change">基于 {{ analyzed_count or 0 }} 例分析</div>
+        </div>
+        <div class="stat-card success">
+            <div class="stat-label">模型准确率</div>
+            <div class="stat-value">{{ model_accuracy or '85%' }}</div>
+            <div class="stat-change">AUC: {{ model_auc or '0.90' }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">待分析 MRI</div>
+            <div class="stat-value">{{ pending_scans or 0 }}</div>
+        </div>
+    </div>
+
+    <div class="content-grid">
+        <div class="panel">
+            <div class="panel-header">
+                <h3 class="panel-title">🧬 脑部生物标志物可视化</h3>
+                <div>
+                    <button class="brain-btn active" onclick="showView('structural')">结构视图</button>
+                    <button class="brain-btn" onclick="showView('heatmap')">热力图</button>
+                    <button class="brain-btn" onclick="resetBrain()">重置</button>
+                </div>
+            </div>
+            <div class="brain-visualization" id="brainContainer">
+                <canvas id="brainCanvas" class="brain-canvas"></canvas>
+                <div class="brain-controls">
+                    <button class="brain-btn" onclick="rotateLeft()">← 左旋</button>
+                    <button class="brain-btn" onclick="rotateRight()">右旋 →</button>
+                </div>
+            </div>
+            <div style="margin-top: 15px; padding: 10px; background: #f9fafb; border-radius: 8px;">
+                <strong>关键发现：</strong>
+                <span id="keyFindings">加载中...</span>
+            </div>
+        </div>
+
+        <div class="panel">
+            <div class="panel-header">
+                <h3 class="panel-title">📊 模型性能指标</h3>
+            </div>
+            <ul class="metrics-list">
+                <li class="metric-item">
+                    <div class="metric-name">准确率 (Accuracy)</div>
+                    <div class="metric-value">{{ accuracy or '0.85' }}</div>
+                </li>
+                <li class="metric-item">
+                    <div class="metric-name">灵敏度 (Sensitivity)</div>
+                    <div class="metric-value">{{ sensitivity or '0.82' }}</div>
+                </li>
+                <li class="metric-item">
+                    <div class="metric-name">特异度 (Specificity)</div>
+                    <div class="metric-value">{{ specificity or '0.88' }}</div>
+                </li>
+                <li class="metric-item">
+                    <div class="metric-name">AUC-ROC</div>
+                    <div class="metric-value">{{ auc or '0.90' }}</div>
+                </li>
+            </ul>
+
+            <div class="chart-container">
+                <canvas id="rocChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div class="content-grid">
+        <div class="panel">
+            <div class="panel-header">
+                <h3 class="panel-title">👥 最近患者</h3>
+                <a href="{{ url_for('main.patients') }}" class="brain-btn">查看全部</a>
+            </div>
+            <table class="patient-table">
+                <thead>
+                    <tr>
+                        <th>患者ID</th>
+                        <th>姓名</th>
+                        <th>年龄</th>
+                        <th>预测结果</th>
+                        <th>置信度</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for patient in recent_patients %}
+                    <tr>
+                        <td>{{ patient.patient_id }}</td>
+                        <td>{{ patient.name }}</td>
+                        <td>{{ patient.age }}</td>
+                        <td>
+                            {% if patient.last_prediction == 'ASD' %}
+                                <span class="badge badge-asd">ASD</span>
+                            {% elif patient.last_prediction == 'NC' %}
+                                <span class="badge badge-nc">NC</span>
+                            {% else %}
+                                <span class="badge badge-pending">待分析</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ "%.2f"|format(patient.confidence * 100 if patient.confidence else 0) }}%</td>
+                        <td>
+                            <a href="{{ url_for('main.patient_detail', id=patient.id) }}"
+                               class="brain-btn" style="padding: 5px 10px; font-size: 12px;">详情</a>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" style="text-align: center; color: #6b7280;">暂无患者数据</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="panel">
+            <div class="panel-header">
+                <h3 class="panel-title">📤 快速上传 MRI</h3>
+            </div>
+            <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+                <div class="upload-icon">📁</div>
+                <p style="font-size: 16px; margin-bottom: 10px;">拖拽或点击上传 NIfTI 文件</p>
+                <p style="font-size: 13px; color: #6b7280;">支持 .nii, .nii.gz 格式</p>
+                <input type="file" id="fileInput" accept=".nii,.nii.gz" style="display: none;"
+                       onchange="handleFileUpload(this)">
+            </div>
+            <div id="uploadProgress" style="display: none; margin-top: 15px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                    <span>上传进度</span>
+                    <span id="progressText">0%</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="panel" style="margin-top: 20px;">
+        <div class="panel-header">
+            <h3 class="panel-title">📈 临床评分与预测概率相关性</h3>
+        </div>
+        <div class="chart-container" style="height: 400px;">
+            <canvas id="scatterChart"></canvas>
+        </div>
+    </div>
+
+    <div class="panel" style="margin-top: 20px;">
+        <div class="panel-header">
+            <h3 class="panel-title">💾 存储监控中心</h3>
+            <div>
+                <button class="brain-btn" onclick="refreshStorageStats()">🔄 刷新</button>
+                <button class="brain-btn" onclick="cleanupTempFiles()">🧹 清理临时文件</button>
+                <button class="brain-btn" onclick="backupDatabase()">💿 备份数据库</button>
+            </div>
+        </div>
+
+        <div class="stats-grid" id="storageStats">
+            <div class="stat-card">
+                <div class="stat-label">上传文件 (uploads)</div>
+                <div class="stat-value" id="uploadSize">-</div>
+                <div class="stat-change" id="uploadCount">- 个文件</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">掩码文件 (masks)</div>
+                <div class="stat-value" id="maskSize">-</div>
+                <div class="stat-change" id="maskCount">- 个文件</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">分析结果 (results)</div>
+                <div class="stat-value" id="resultSize">-</div>
+                <div class="stat-change" id="resultCount">- 个文件</div>
+            </div>
+            <div class="stat-card warning">
+                <div class="stat-label">临时文件 (temp)</div>
+                <div class="stat-value" id="tempSize">-</div>
+                <div class="stat-change" id="tempCount">- 个文件</div>
+            </div>
+        </div>
+
+        <div style="margin-top: 20px;">
+            <h4 style="margin-bottom: 15px;">💿 磁盘空间使用情况</h4>
+            <div class="progress-bar" style="height: 30px; position: relative;">
+                <div class="progress-fill" id="diskProgressBar"
+                     style="width: 0%; background: linear-gradient(90deg, #10b981, #f59e0b, #ef4444);">
+                </div>
+                <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+                            color: white; font-weight: bold; text-shadow: 1px 1px 2px rgba(0,0,0,0.5);">
+                    <span id="diskUsedPercent">0%</span> 已使用
+                </div>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-top: 10px; font-size: 14px; color: #6b7280;">
+                <span>已用: <strong id="diskUsed">-</strong></span>
+                <span>可用: <strong id="diskFree">-</strong></span>
+                <span>总计: <strong id="diskTotal">-</strong></span>
+            </div>
+            <div id="diskWarning" style="display: none; margin-top: 10px; padding: 10px;
+                 background: #fef3c7; border-left: 4px solid #f59e0b; border-radius: 4px; color: #92400e;">
+                ⚠️ 警告：磁盘空间不足，请及时清理或扩容！
+            </div>
+        </div>
+
+        <div style="margin-top: 20px;">
+            <h4 style="margin-bottom: 15px;">🗄️ 数据库统计</h4>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-label">用户数</div>
+                    <div class="stat-value" id="dbUsers">-</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">患者数</div>
+                    <div class="stat-value" id="dbPatients">-</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">MRI扫描</div>
+                    <div class="stat-value" id="dbScans">-</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">分析结果</div>
+                    <div class="stat-value" id="dbResults">-</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/brain_visualization.js') }}"></script>
+<script src="{{ url_for('static', filename='js/charts.js') }}"></script>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    window.brainViz = new BrainVisualizer('brainContainer', {
+        width: document.getElementById('brainContainer').clientWidth,
+        height: 500
+    });
+
+    window.medicalCharts = new MedicalCharts();
+    loadROCData();
+    loadScatterData();
+
+    // 加载存储统计
+    loadStorageStats();
+
+    // 每5分钟自动刷新存储统计
+    setInterval(loadStorageStats, 5 * 60 * 1000);
+});
+
+async function loadScatterData() {
+    try {
+        const response = await fetch('/api/patients/clinical-correlation');
+        const data = await response.json();
+        if (data.scatter_data) {
+            medicalCharts.createScatterPlot('scatterChart', data.scatter_data);
+        }
+    } catch (error) {
+        console.error('加载散点图数据失败:', error);
+    }
+}
+
+// 存储监控功能
+async function loadStorageStats() {
+    try {
+        const response = await fetch('/api/storage/stats');
+        const data = await response.json();
+
+        if (data.success) {
+            updateStorageDisplay(data.storage);
+            updateDiskDisplay(data.disk);
+        }
+    } catch (error) {
+        console.error('加载存储统计失败:', error);
+    }
+}
+
+function updateStorageDisplay(storage) {
+    // 更新各目录统计
+    const dirs = ['uploads', 'masks', 'results', 'temp'];
+    dirs.forEach(dir => {
+        const stats = storage[dir];
+        if (stats) {
+            document.getElementById(`${dir}Size`).textContent =
+                formatFileSize(stats.total_size || 0);
+            document.getElementById(`${dir}Count`).textContent =
+                `${stats.file_count || 0} 个文件`;
+        }
+    });
+
+    // 更新数据库统计
+    const dbStats = storage.database;
+    if (dbStats) {
+        document.getElementById('dbUsers').textContent = dbStats.users || 0;
+        document.getElementById('dbPatients').textContent = dbStats.patients || 0;
+        document.getElementById('dbScans').textContent = dbStats.mri_scans || 0;
+        document.getElementById('dbResults').textContent = dbStats.analysis_results || 0;
+    }
+}
+
+function updateDiskDisplay(disk) {
+    if (!disk) return;
+
+    const percent = disk.used_percent || 0;
+    document.getElementById('diskProgressBar').style.width = `${percent}%`;
+    document.getElementById('diskUsedPercent').textContent = `${percent.toFixed(1)}%`;
+    document.getElementById('diskUsed').textContent = `${disk.used_gb || 0} GB`;
+    document.getElementById('diskFree').textContent = `${disk.free_gb || 0} GB`;
+    document.getElementById('diskTotal').textContent = `${disk.total_gb || 0} GB`;
+
+    // 显示警告
+    const warningEl = document.getElementById('diskWarning');
+    if (disk.warning) {
+        warningEl.style.display = 'block';
+    } else {
+        warningEl.style.display = 'none';
+    }
+}
+
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+async function refreshStorageStats() {
+    const btn = event.target;
+    btn.disabled = true;
+    btn.textContent = '加载中...';
+
+    await loadStorageStats();
+
+    btn.disabled = false;
+    btn.textContent = '🔄 刷新';
+}
+
+async function cleanupTempFiles() {
+    if (!confirm('确定要清理超过24小时的临时文件吗？')) return;
+
+    try {
+        const response = await fetch('/api/storage/cleanup/temp', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ max_age_hours: 24 })
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            alert(`✅ 成功清理 ${data.deleted_count} 个临时文件`);
+            loadStorageStats();
+        } else {
+            alert(`❌ 清理失败: ${data.error}`);
+        }
+    } catch (error) {
+        console.error('清理临时文件失败:', error);
+        alert('清理失败，请查看控制台');
+    }
+}
+
+async function backupDatabase() {
+    if (!confirm('确定要备份数据库吗？这可能需要几分钟时间。')) return;
+
+    const btn = event.target;
+    btn.disabled = true;
+    btn.textContent = '备份中...';
+
+    try {
+        const response = await fetch('/api/storage/backup', {
+            method: 'POST'
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            const sizeMB = (data.file_size / (1024 * 1024)).toFixed(2);
+            alert(`✅ 数据库备份成功！\n文件: ${data.backup_file}\n大小: ${sizeMB} MB`);
+        } else {
+            alert(`❌ 备份失败: ${data.error}`);
+        }
+    } catch (error) {
+        console.error('数据库备份失败:', error);
+        alert('备份失败，请查看控制台');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '💿 备份数据库';
+    }
+}
+</script>
+{% endblock %}

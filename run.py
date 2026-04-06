@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from flask_migrate import Migrate
 
 from app import create_app, db
+from app.websocket_handler import socketio
 from config import DevelopmentConfig, config
 
 # 加载环境变量
@@ -54,6 +55,8 @@ def make_shell_context():
         'SystemLog': SystemLog,
         'app': app
     }
+
+
 
 
 def setup_logging(app):
@@ -253,12 +256,13 @@ if __name__ == '__main__':
     app.logger.info(f'服务器启动：http://{host}:{port}')
 
     try:
-        # 启动应用
-        app.run(
+        # 启动应用（使用socketio.run替代app.run）
+        socketio.run(
+            app,
             host=host,
             port=port,
             debug=debug,
-            threaded=True
+            use_reloader=False
         )
     except KeyboardInterrupt:
         app.logger.info('服务器已停止')

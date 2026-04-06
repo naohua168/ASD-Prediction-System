@@ -1,19 +1,19 @@
 {
-  "created_at": "2026-04-05T18:18:12.758397",
+  "created_at": "2026-04-06T16:29:55.805257",
   "tables": [
-    "users",
-    "patients",
-    "mri_scans",
-    "analysis_results",
-    "clinical_scores",
-    "system_logs"
+    "system_logs_20260406",
+    "clinical_scores_20260406",
+    "analysis_results_20260406",
+    "mri_scans_20260406",
+    "patients_20260406",
+    "users_20260406"
   ],
   "files": {
-    "users": "data_sync/exports/users_20260405_181812.json",
-    "patients": "data_sync/exports/patients_20260405_181812.json",
-    "mri_scans": "data_sync/exports/mri_scans_20260405_181812.json",
-    "analysis_results": "data_sync/exports/analysis_results_20260405_181812.json",
-    "clinical_scores": "data_sync/exports/clinical_scores_20260405_181812.json",
-    "system_logs": "data_sync/exports/system_logs_20260405_181812.json"
+    "system_logs_20260406": "data_sync\\exports\\system_logs_20260406_162955.json",
+    "clinical_scores_20260406": "data_sync\\exports\\clinical_scores_20260406_162955.json",
+    "analysis_results_20260406": "data_sync\\exports\\analysis_results_20260406_162955.json",
+    "mri_scans_20260406": "data_sync\\exports\\mri_scans_20260406_162955.json",
+    "patients_20260406": "data_sync\\exports\\patients_20260406_162955.json",
+    "users_20260406": "data_sync\\exports\\users_20260406_162955.json"
   }
 }
