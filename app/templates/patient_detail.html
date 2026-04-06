@@ -1,0 +1,412 @@
+<!-- 文件路径: E:\自闭症\ASD-Prediction-System\app\templates\patient_detail.html -->
+{% extends "base.html" %}
+
+{% block title %}{{ patient.name }} - 患者详情{% endblock %}
+
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+<script src="https://cdn.jsdelivr.net/npm/three@0.150.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.2.1/dist/chart.umd.min.js"></script>
+<style>
+    .timeline {
+        position: relative;
+        padding-left: 30px;
+    }
+    .timeline::before {
+        content: '';
+        position: absolute;
+        left: 10px;
+        top: 0;
+        bottom: 0;
+        width: 2px;
+        background: #e5e7eb;
+    }
+    .timeline-item {
+        position: relative;
+        margin-bottom: 30px;
+        padding: 20px;
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    }
+    .timeline-item::before {
+        content: '';
+        position: absolute;
+        left: -24px;
+        top: 25px;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #2563eb;
+        border: 2px solid white;
+        box-shadow: 0 0 0 2px #2563eb;
+    }
+    .tab-container {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 20px;
+        border-bottom: 2px solid #e5e7eb;
+    }
+    .tab-btn {
+        padding: 12px 24px;
+        border: none;
+        background: none;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 600;
+        color: #6b7280;
+        border-bottom: 3px solid transparent;
+        transition: all 0.2s;
+    }
+    .tab-btn.active {
+        color: #2563eb;
+        border-bottom-color: #2563eb;
+    }
+    .tab-content {
+        display: none;
+    }
+    .tab-content.active {
+        display: block;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="dashboard-container">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+        <div>
+            <h2>{{ patient.name }}</h2>
+            <p style="color: #6b7280; margin: 5px 0 0 0;">患者ID: {{ patient.patient_id }}</p>
+        </div>
+        <div style="display: flex; gap: 10px;">
+            <a href="{{ url_for('main.upload_mri_patient', patient_id=patient.id) }}" class="brain-btn">
+                <i class="fas fa-upload"></i> 上传MRI
+            </a>
+            <a href="{{ url_for('main.clinical_score_form', patient_id=patient.id) }}" class="brain-btn">
+                <i class="fas fa-edit"></i> 添加评分
+            </a>
+            <a href="{{ url_for('main.patients') }}" class="brain-btn" style="background: #6b7280;">返回</a>
+        </div>
+    </div>
+
+    <div class="stats-grid" style="margin-bottom: 30px;">
+        <div class="stat-card">
+            <div class="stat-label">年龄 / 性别</div>
+            <div class="stat-value" style="font-size: 24px;">{{ patient.age }}岁 / {{ '男' if patient.gender == 'male' else '女' }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">全量表智商</div>
+            <div class="stat-value" style="font-size: 24px;">{{ patient.full_scale_iq or 'N/A' }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">ADOS-G评分</div>
+            <div class="stat-value" style="font-size: 24px;">{{ patient.ados_g_score or 'N/A' }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">ADI-R评分</div>
+            <div class="stat-value" style="font-size: 24px;">{{ patient.adi_r_score or 'N/A' }}</div>
+        </div>
+    </div>
+
+    <div class="tab-container">
+        <button class="tab-btn active" onclick="switchTab('mri')">
+            <i class="fas fa-brain"></i> MRI扫描 ({{ mri_scans|length }})
+        </button>
+        <button class="tab-btn" onclick="switchTab('analysis')">
+            <i class="fas fa-chart-line"></i> 分析结果 ({{ analysis_results|length }})
+        </button>
+        <button class="tab-btn" onclick="switchTab('clinical')">
+            <i class="fas fa-clipboard-check"></i> 临床评分 ({{ clinical_scores|length }})
+        </button>
+        <button class="tab-btn" onclick="switchTab('history')">
+            <i class="fas fa-history"></i> 病史记录
+        </button>
+    </div>
+
+    <div id="tab-mri" class="tab-content active">
+        {% if mri_scans %}
+        <div style="display: grid; gap: 15px;">
+            {% for scan in mri_scans %}
+            <div class="panel">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <h4 style="margin: 0 0 10px 0;">📁 {{ scan.original_filename }}</h4>
+                        <p style="margin: 0; color: #6b7280; font-size: 14px;">
+                            扫描日期: {{ scan.scan_date.strftime('%Y-%m-%d %H:%M') }} |
+                            文件大小: {{ "%.2f"|format(scan.file_size / 1024 / 1024) }} MB |
+                            类型: {{ scan.scan_type or 'T1' }}
+                        </p>
+                        {% if scan.notes %}
+                        <p style="margin: 5px 0 0 0; color: #6b7280; font-size: 13px;">备注: {{ scan.notes }}</p>
+                        {% endif %}
+                    </div>
+                    <div style="display: flex; gap: 10px; align-items: center;">
+                        <!-- 模型选择器 -->
+                        <div class="form-group" style="margin: 0;">
+                            <select id="modelSelector_{{ scan.id }}" class="form-control" style="min-width: 250px;">
+                                <option value="">加载中...</option>
+                            </select>
+                            <small class="text-muted" id="modelDesc_{{ scan.id }}" style="font-size: 11px; color: #6b7280;"></small>
+                        </div>
+                        <button class="brain-btn" onclick="startAnalysisWithModel({{ scan.id }})">
+                            <i class="fas fa-play"></i> 开始分析
+                        </button>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div style="text-align: center; padding: 60px; color: #6b7280;">
+            <i class="fas fa-brain" style="font-size: 48px; margin-bottom: 20px; opacity: 0.3;"></i>
+            <p>暂无MRI扫描数据</p>
+            <a href="{{ url_for('main.upload_mri_patient', patient_id=patient.id) }}" class="brain-btn" style="margin-top: 15px;">
+                上传第一个MRI文件
+            </a>
+        </div>
+        {% endif %}
+    </div>
+
+    <div id="tab-analysis" class="tab-content">
+        {% if analysis_results %}
+        <div style="display: grid; gap: 15px;">
+            {% for result in analysis_results %}
+            <div class="panel" style="border-left: 4px solid {% if result.prediction == 'ASD' %}#ef4444{% else %}#10b981{% endif %};">
+                <div style="display: flex; justify-content: space-between; align-items: start;">
+                    <div style="flex: 1;">
+                        <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 10px;">
+                            {% if result.prediction == 'ASD' %}
+                                <span class="badge badge-asd" style="font-size: 14px; padding: 6px 16px;">ASD</span>
+                            {% else %}
+                                <span class="badge badge-nc" style="font-size: 14px; padding: 6px 16px;">NC</span>
+                            {% endif %}
+                            <span style="color: #6b7280; font-size: 14px;">{{ result.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+                        </div>
+                        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-top: 15px;">
+                            <div class="info-item">
+                                <div class="info-label">ASD概率</div>
+                                <div class="info-value" style="color: #2563eb;">{{ "%.2f"|format(result.probability * 100) }}%</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">置信度</div>
+                                <div class="info-value">{{ "%.2f"|format(result.confidence * 100) }}%</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">模型版本</div>
+                                <div class="info-value" style="font-size: 14px;">{{ result.model_version or 'v1.0' }}</div>
+                            </div>
+                        </div>
+                    </div>
+                    <a href="{{ url_for('main.analysis_report', result_id=result.id) }}" class="brain-btn">
+                        <i class="fas fa-file-medical"></i> 查看报告
+                    </a>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div style="text-align: center; padding: 60px; color: #6b7280;">
+            <i class="fas fa-chart-line" style="font-size: 48px; margin-bottom: 20px; opacity: 0.3;"></i>
+            <p>暂无分析结果</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <div id="tab-clinical" class="tab-content">
+        {% if clinical_scores %}
+        <table class="patient-table">
+            <thead>
+                <tr>
+                    <th>评分类型</th>
+                    <th>分数</th>
+                    <th>评估日期</th>
+                    <th>备注</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for score in clinical_scores %}
+                <tr>
+                    <td><strong>{{ score.score_type }}</strong></td>
+                    <td style="font-size: 18px; color: #2563eb;">{{ score.score_value }}</td>
+                    <td>{{ score.assessment_date.strftime('%Y-%m-%d') if score.assessment_date else 'N/A' }}</td>
+                    <td>{{ score.notes or '-' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div style="text-align: center; padding: 60px; color: #6b7280;">
+            <i class="fas fa-clipboard-check" style="font-size: 48px; margin-bottom: 20px; opacity: 0.3;"></i>
+            <p>暂无临床评分记录</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <div id="tab-history" class="tab-content">
+        <div class="panel">
+            <h3 style="margin-bottom: 15px;">📝 家族史与备注</h3>
+            <div style="line-height: 1.8; color: #374151;">
+                {% if patient.family_history %}
+                <p><strong>家族史:</strong></p>
+                <p style="white-space: pre-wrap;">{{ patient.family_history }}</p>
+                {% else %}
+                <p style="color: #9ca3af;">无家族史记录</p>
+                {% endif %}
+
+                {% if patient.notes %}
+                <p style="margin-top: 20px;"><strong>备注:</strong></p>
+                <p style="white-space: pre-wrap;">{{ patient.notes }}</p>
+                {% else %}
+                <p style="color: #9ca3af; margin-top: 20px;">无额外备注</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/analysis.js') }}"></script>
+<script>
+// 页面加载时获取模型列表并初始化所有选择器
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('开始加载模型列表...');
+    
+    fetch('/api/models/list')
+        .then(res => {
+            if (!res.ok) {
+                throw new Error(`HTTP error! status: ${res.status}`);
+            }
+            return res.json();
+        })
+        .then(data => {
+            console.log('模型列表数据:', data);
+            
+            if (!data.success || !data.models || data.models.length === 0) {
+                // 如果没有模型，更新所有选择器
+                document.querySelectorAll('[id^="modelSelector_"]').forEach(selector => {
+                    selector.innerHTML = '<option value="">暂无可用模型</option>';
+                    selector.disabled = true;
+                });
+                console.warn('没有可用的模型');
+                return;
+            }
+            
+            console.log(`找到 ${data.models.length} 个模型`);
+            
+            // 为每个MRI扫描的选择器填充模型列表
+            data.models.forEach(model => {
+                document.querySelectorAll('[id^="modelSelector_"]').forEach(selector => {
+                    const option = document.createElement('option');
+                    option.value = model.id;
+                    option.text = `${model.name} (准确率: ${(model.accuracy*100).toFixed(1)}%)`;
+                    option.dataset.description = `训练于 ${model.trained_at}, AUC: ${model.auc}`;
+                    selector.appendChild(option);
+                });
+            });
+            
+            // 默认选择性能最好的模型（第一个）
+            document.querySelectorAll('[id^="modelSelector_"]').forEach(selector => {
+                if (data.models.length > 0) {
+                    selector.value = data.models[0].id;
+                    const scanId = selector.id.replace('modelSelector_', '');
+                    updateModelDescription(scanId);
+                }
+            });
+            
+            console.log('模型列表加载完成');
+        })
+        .catch(err => {
+            console.error('获取模型列表失败:', err);
+            document.querySelectorAll('[id^="modelSelector_"]').forEach(selector => {
+                selector.innerHTML = '<option value="">加载失败</option>';
+                selector.disabled = true;
+            });
+        });
+});
+
+// 更新模型描述
+function updateModelDescription(scanId) {
+    const selector = document.getElementById('modelSelector_' + scanId);
+    const descElement = document.getElementById('modelDesc_' + scanId);
+    if (selector && descElement) {
+        const selectedOption = selector.options[selector.selectedIndex];
+        const description = selectedOption.dataset.description || '';
+        descElement.textContent = description;
+    }
+}
+
+// 监听模型选择变化
+document.addEventListener('change', function(e) {
+    if (e.target.id && e.target.id.startsWith('modelSelector_')) {
+        const scanId = e.target.id.replace('modelSelector_', '');
+        updateModelDescription(scanId);
+    }
+});
+
+// 使用选定的模型开始分析
+function startAnalysisWithModel(mriScanId) {
+    const modelSelector = document.getElementById('modelSelector_' + mriScanId);
+    const modelId = modelSelector.value;
+    
+    if (!modelId) {
+        alert('请选择一个分析模型');
+        return;
+    }
+    
+    // 显示加载状态
+    const btn = event.target.closest('button');
+    const originalText = btn.innerHTML;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 提交中...';
+    btn.disabled = true;
+    
+    console.log(`提交分析任务: MRI Scan ID=${mriScanId}, Model ID=${modelId}`);
+    
+    fetch('/api/analysis/predict-with-model', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            mri_scan_id: mriScanId,
+            model_id: modelId
+        })
+    })
+    .then(res => {
+        if (!res.ok) {
+            throw new Error(`HTTP error! status: ${res.status}`);
+        }
+        return res.json();
+    })
+    .then(data => {
+        console.log('分析任务响应:', data);
+        
+        if (data.success) {
+            alert('✅ 分析任务已提交！\n\n任务ID: ' + data.task_id + '\n\n请稍后查看结果。');
+            // 可以选择跳转到任务列表页或报告页
+            if (data.result_id) {
+                window.location.href = `/analysis/report/${data.result_id}`;
+            } else {
+                window.location.reload();
+            }
+        } else {
+            alert('❌ 分析失败: ' + (data.error || '未知错误'));
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        }
+    })
+    .catch(err => {
+        console.error('提交分析失败:', err);
+        alert('❌ 网络错误，请稍后重试\n\n错误详情: ' + err.message);
+        btn.innerHTML = originalText;
+        btn.disabled = false;
+    });
+}
+
+function switchTab(tabName) {
+    document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+
+    event.target.classList.add('active');
+    document.getElementById('tab-' + tabName).classList.add('active');
+}
+</script>
+{% endblock %}

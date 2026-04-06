@@ -1,0 +1,179 @@
+<!-- 文件路径: E:\自闭症\ASD-Prediction-System\app\templates\patients.html -->
+{% extends "base.html" %}
+
+{% block title %}患者管理 - ASD预测系统{% endblock %}
+
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+<style>
+    .patient-card {
+        transition: all 0.3s;
+        cursor: pointer;
+    }
+    .patient-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 8px 20px rgba(37, 99, 235, 0.15);
+    }
+    .filter-bar {
+        background: white;
+        padding: 20px;
+        border-radius: 12px;
+        margin-bottom: 20px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="dashboard-container">
+    <div class="panel-header" style="margin-bottom: 20px;">
+        <h2>👥 患者管理</h2>
+        <a href="{{ url_for('main.patient_form') }}" class="brain-btn">
+            <i class="fas fa-plus"></i> 新建患者档案
+        </a>
+    </div>
+
+    <div class="filter-bar">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+            <input type="text" id="searchInput" placeholder="搜索患者姓名或ID..."
+                   style="padding: 10px; border: 1px solid #e5e7eb; border-radius: 8px;"
+                   onkeyup="filterPatients()">
+            <select id="genderFilter" onchange="filterPatients()"
+                    style="padding: 10px; border: 1px solid #e5e7eb; border-radius: 8px;">
+                <option value="">全部性别</option>
+                <option value="male">男</option>
+                <option value="female">女</option>
+            </select>
+            <select id="predictionFilter" onchange="filterPatients()"
+                    style="padding: 10px; border: 1px solid #e5e7eb; border-radius: 8px;">
+                <option value="">全部结果</option>
+                <option value="ASD">ASD阳性</option>
+                <option value="NC">正常对照</option>
+                <option value="pending">待分析</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="stats-grid" style="margin-bottom: 20px;">
+        <div class="stat-card">
+            <div class="stat-label">总患者数</div>
+            <div class="stat-value">{{ patients|length }}</div>
+        </div>
+        <div class="stat-card success">
+            <div class="stat-label">已完成分析</div>
+            <div class="stat-value" id="analyzedCount">0</div>
+        </div>
+        <div class="stat-card warning">
+            <div class="stat-label">待分析</div>
+            <div class="stat-value" id="pendingCount">0</div>
+        </div>
+    </div>
+
+    <div id="patientsGrid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 20px;">
+        {% for patient in patients %}
+        <div class="patient-card panel" data-patient-id="{{ patient.id }}"
+             data-gender="{{ patient.gender }}"
+             data-name="{{ patient.name }}"
+             data-prediction="{{ patient.last_prediction or 'pending' }}"
+             onclick="window.location.href='{{ url_for('main.patient_detail', id=patient.id) }}'">
+            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
+                <div>
+                    <h3 style="margin: 0; color: #2563eb;">{{ patient.name }}</h3>
+                    <p style="margin: 5px 0 0 0; color: #6b7280; font-size: 14px;">ID: {{ patient.patient_id }}</p>
+                </div>
+                {% if patient.last_prediction == 'ASD' %}
+                    <span class="badge badge-asd">ASD</span>
+                {% elif patient.last_prediction == 'NC' %}
+                    <span class="badge badge-nc">NC</span>
+                {% else %}
+                    <span class="badge badge-pending">待分析</span>
+                {% endif %}
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 15px;">
+                <div class="info-item">
+                    <div class="info-label">年龄</div>
+                    <div class="info-value">{{ patient.age }}岁</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">性别</div>
+                    <div class="info-value">{{ '男' if patient.gender == 'male' else '女' }}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">ADOS评分</div>
+                    <div class="info-value">{{ patient.ados_g_score or 'N/A' }}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">智商</div>
+                    <div class="info-value">{{ patient.full_scale_iq or 'N/A' }}</div>
+                </div>
+            </div>
+
+            {% if patient.confidence %}
+            <div style="background: #f9fafb; padding: 10px; border-radius: 8px; margin-top: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 13px; color: #6b7280;">置信度</span>
+                    <span style="font-weight: bold; color: #2563eb;">{{ "%.2f"|format(patient.confidence * 100) }}%</span>
+                </div>
+                <div class="progress-bar" style="margin-top: 8px;">
+                    <div class="progress-fill" style="width: {{ patient.confidence * 100 }}%"></div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        {% else %}
+        <div style="grid-column: 1 / -1; text-align: center; padding: 60px; color: #6b7280;">
+            <i class="fas fa-users" style="font-size: 48px; margin-bottom: 20px; opacity: 0.3;"></i>
+            <p style="font-size: 18px;">暂无患者数据</p>
+            <a href="{{ url_for('main.patient_form') }}" class="brain-btn" style="margin-top: 15px;">
+                创建第一个患者档案
+            </a>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function filterPatients() {
+    const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+    const genderFilter = document.getElementById('genderFilter').value;
+    const predictionFilter = document.getElementById('predictionFilter').value;
+    const cards = document.querySelectorAll('.patient-card');
+
+    let visibleCount = 0;
+    let analyzedCount = 0;
+    let pendingCount = 0;
+
+    cards.forEach(card => {
+        const name = card.dataset.name.toLowerCase();
+        const gender = card.dataset.gender;
+        const prediction = card.dataset.prediction;
+
+        const matchesSearch = name.includes(searchTerm);
+        const matchesGender = !genderFilter || gender === genderFilter;
+        const matchesPrediction = !predictionFilter || prediction === predictionFilter;
+
+        if (matchesSearch && matchesGender && matchesPrediction) {
+            card.style.display = 'block';
+            visibleCount++;
+            if (prediction === 'pending') {
+                pendingCount++;
+            } else {
+                analyzedCount++;
+            }
+        } else {
+            card.style.display = 'none';
+        }
+    });
+
+    document.getElementById('analyzedCount').textContent = analyzedCount;
+    document.getElementById('pendingCount').textContent = pendingCount;
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    filterPatients();
+});
+</script>
+{% endblock %}
