@@ -1,0 +1,113 @@
+{
+  "table_name": "users",
+  "schema": [
+    {
+      "Field": "id",
+      "Type": "int",
+      "Null": "NO",
+      "Key": "PRI",
+      "Default": null,
+      "Extra": "auto_increment"
+    },
+    {
+      "Field": "username",
+      "Type": "varchar(64)",
+      "Null": "NO",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "email",
+      "Type": "varchar(120)",
+      "Null": "NO",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "password_hash",
+      "Type": "varchar(128)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "role",
+      "Type": "enum('doctor','researcher')",
+      "Null": "YES",
+      "Key": "",
+      "Default": "doctor",
+      "Extra": ""
+    },
+    {
+      "Field": "is_active",
+      "Type": "tinyint(1)",
+      "Null": "YES",
+      "Key": "",
+      "Default": "1",
+      "Extra": ""
+    },
+    {
+      "Field": "hospital",
+      "Type": "varchar(100)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "department",
+      "Type": "varchar(100)",
+      "Null": "YES",
+      "Key": "",
+      "Default": null,
+      "Extra": ""
+    },
+    {
+      "Field": "created_at",
+      "Type": "datetime",
+      "Null": "YES",
+      "Key": "",
+      "Default": "CURRENT_TIMESTAMP",
+      "Extra": "DEFAULT_GENERATED"
+    },
+    {
+      "Field": "updated_at",
+      "Type": "datetime",
+      "Null": "YES",
+      "Key": "",
+      "Default": "CURRENT_TIMESTAMP",
+      "Extra": "DEFAULT_GENERATED on update CURRENT_TIMESTAMP"
+    }
+  ],
+  "data": [
+    {
+      "id": 1,
+      "username": "admin",
+      "email": "admin@example.com",
+      "password_hash": "pbkdf2:sha256:260000$Z9X1L8N0$a1b2c3d4e5f67890",
+      "role": "doctor",
+      "is_active": 1,
+      "hospital": null,
+      "department": null,
+      "created_at": "2026-04-05T15:55:37",
+      "updated_at": "2026-04-05T15:55:37"
+    },
+    {
+      "id": 2,
+      "username": "Alice",
+      "email": "Alice@example.com",
+      "password_hash": "pbkdf2:sha256:260000$dummy_hash_1234567890abcdef",
+      "role": "doctor",
+      "is_active": 1,
+      "hospital": "市立儿童医学中心",
+      "department": "发育行为儿科",
+      "created_at": "2026-04-05T17:03:21",
+      "updated_at": "2026-04-05T17:05:01"
+    }
+  ],
+  "checksum": "2_1775379901.0",
+  "exported_at": "2026-04-06T15:46:59.813829"
+}
