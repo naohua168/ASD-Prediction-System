@@ -1,5 +1,6 @@
 import json
 import os
+import logging
 from datetime import datetime
 
 import numpy as np
@@ -10,10 +11,10 @@ from werkzeug.utils import secure_filename
 from app import db
 from app.forms import LoginForm, RegistrationForm, PatientForm, MRIScanForm, ClinicalScoreForm
 from app.models import User, Patient, MRIScan, AnalysisResult, ClinicalScore, SystemLog
-from ml_core.prediction_service import ASDPredictionService
-from tasks.analysis_tasks import submit_analysis_task, get_task_status
+from tasks.analysis_tasks import submit_analysis_task, get_task_status, cancel_task, get_task_manager_stats, get_all_tasks
 
 main_bp = Blueprint('main', __name__)
+logger = logging.getLogger(__name__)
 
 
 def allowed_file(filename):
@@ -39,21 +40,25 @@ def log_action(action, description):
 @login_required
 def dashboard():
     """医疗专业仪表盘"""
-    total_patients = Patient.query.count()
+    total_patients = Patient.query.filter_by(is_deleted=False).count()
     new_patients = Patient.query.filter(
-        Patient.created_at >= datetime.utcnow().replace(day=1)
+        Patient.created_at >= datetime.utcnow().replace(day=1),
+        Patient.is_deleted == False
     ).count()
 
-    analyzed_results = AnalysisResult.query.all()
+    analyzed_results = AnalysisResult.query.join(Patient).filter(
+        Patient.is_deleted == False
+    ).all()
     analyzed_count = len(analyzed_results)
     asd_count = sum(1 for r in analyzed_results if r.prediction == 'ASD')
     asd_rate = f"{(asd_count / analyzed_count * 100):.1f}%" if analyzed_count > 0 else "0%"
 
-    pending_scans = MRIScan.query.filter(
+    pending_scans = MRIScan.query.join(Patient).filter(
+        Patient.is_deleted == False,
         ~MRIScan.analysis_results.any()
     ).count()
 
-    recent_patients = Patient.query.order_by(Patient.created_at.desc()).limit(10).all()
+    recent_patients = Patient.query.filter_by(is_deleted=False).order_by(Patient.created_at.desc()).limit(10).all()
 
     for patient in recent_patients:
         last_result = AnalysisResult.query.filter_by(
@@ -95,6 +100,68 @@ def analysis_report(result_id):
                            model_metrics=metrics)
 
 
+@main_bp.route('/preprocessing/qc-report/<int:mri_scan_id>')
+@login_required
+def preprocessing_qc_report(mri_scan_id):
+    """查看MRI预处理质量控制报告"""
+    mri_scan = MRIScan.query.get_or_404(mri_scan_id)
+    patient = mri_scan.patient
+    
+    # 权限检查
+    if patient.doctor_id != current_user.id and current_user.role != 'researcher':
+        flash('您没有权限查看此报告', 'error')
+        return redirect(url_for('main.dashboard'))
+    
+    # 获取预处理信息
+    from app.models import AnalysisTask
+    task = AnalysisTask.query.filter_by(
+        mri_scan_id=mri_scan_id
+    ).filter(
+        AnalysisTask.preprocess_info.isnot(None)
+    ).order_by(AnalysisTask.created_at.desc()).first()
+    
+    preprocess_info = None
+    if task and task.preprocess_info:
+        import json
+        preprocess_info = json.loads(task.preprocess_info)
+    
+    return render_template('preprocessing_qc_report.html',
+                           mri_scan=mri_scan,
+                           patient=patient,
+                           preprocess_info=preprocess_info)
+
+
+@main_bp.route('/preprocessing/visualization/<int:mri_scan_id>')
+@login_required
+def preprocessing_visualization(mri_scan_id):
+    """查看MRI预处理中间结果可视化"""
+    mri_scan = MRIScan.query.get_or_404(mri_scan_id)
+    patient = mri_scan.patient
+    
+    # 权限检查
+    if patient.doctor_id != current_user.id and current_user.role != 'researcher':
+        flash('您没有权限查看此内容', 'error')
+        return redirect(url_for('main.dashboard'))
+    
+    # 获取预处理信息
+    from app.models import AnalysisTask
+    task = AnalysisTask.query.filter_by(
+        mri_scan_id=mri_scan_id
+    ).filter(
+        AnalysisTask.preprocess_info.isnot(None)
+    ).order_by(AnalysisTask.created_at.desc()).first()
+    
+    preprocess_info = None
+    if task and task.preprocess_info:
+        import json
+        preprocess_info = json.loads(task.preprocess_info)
+    
+    return render_template('preprocessing_visualization.html',
+                           mri_scan=mri_scan,
+                           patient=patient,
+                           preprocess_info=preprocess_info)
+
+
 @main_bp.route('/test-3d-brain')
 @login_required
 def test_3d_brain():
@@ -107,9 +174,9 @@ def test_3d_brain():
 def api_model_metrics():
     """获取模型性能指标 API"""
     from ml_core.prediction_service import ASDPredictionService
-    
+
     service = ASDPredictionService()
-    
+
     # 尝试加载推荐模型
     recommended = service.registry.get_recommended_model()
     if recommended:
@@ -227,7 +294,7 @@ def api_clinical_correlation():
 @login_required
 def patients():
     """患者列表页面"""
-    patients = Patient.query.filter_by(doctor_id=current_user.id).all()
+    patients = Patient.query.filter_by(doctor_id=current_user.id, is_deleted=False).all()
     return render_template('patients.html', patients=patients)
 
 
@@ -267,7 +334,7 @@ def start_analysis(mri_id):
         data = request.get_json() if request.is_json else {}
         model_id = data.get('model_id')  # 可选：指定的模型ID
         use_preprocessing = data.get('use_preprocessing', False)  # 可选：是否使用预处理
-        
+
         log_action('ANALYSIS_STARTED', f'启动分析: MRI ID={mri_id}, Model={model_id}, Preprocess={use_preprocessing}')
 
         # 提交异步任务
@@ -289,6 +356,59 @@ def start_analysis(mri_id):
     except Exception as e:
         current_app.logger.error(f'分析任务提交失败: {e}')
         log_action('ANALYSIS_FAILED', f'分析任务提交失败: MRI ID={mri_id}, Error={str(e)}')
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@main_bp.route('/preprocessing/start/<int:mri_id>', methods=['POST'])
+@login_required
+def start_preprocessing(mri_id):
+    """启动独立的MRI预处理任务（异步）"""
+    mri_scan = MRIScan.query.get_or_404(mri_id)
+    patient = mri_scan.patient
+    
+    if patient.doctor_id != current_user.id and current_user.role != 'researcher':
+        return jsonify({'success': False, 'error': '没有权限'}), 403
+    
+    try:
+        # 获取请求参数
+        data = request.get_json() if request.is_json else {}
+        config_preset = data.get('config_preset', 'standard')
+        custom_config = data.get('custom_config', {})
+        save_intermediate = data.get('save_intermediate', False)
+        
+        # 构建配置
+        if config_preset == 'custom' and custom_config:
+            preprocess_config = custom_config
+        else:
+            from ml_core.prepare_data_wrapper import get_preprocessing_config_presets
+            presets = get_preprocessing_config_presets()
+            preprocess_config = presets.get(config_preset, presets['standard'])
+        
+        log_action('PREPROCESSING_STARTED', f'启动预处理: MRI ID={mri_id}, Config={config_preset}')
+        
+        # 提交预处理任务
+        from tasks.task_manager import submit_preprocessing_task
+        task_id = submit_preprocessing_task(
+            mri_scan_id=mri_id,
+            patient_id=patient.id,
+            user_id=current_user.id,
+            config=preprocess_config,
+            save_intermediate=save_intermediate
+        )
+        
+        return jsonify({
+            'success': True,
+            'task_id': task_id,
+            'message': '预处理任务已提交，请稍后查看QC报告',
+            'qc_report_url': f'/preprocessing/qc-report/{mri_id}'
+        })
+    
+    except Exception as e:
+        current_app.logger.error(f'预处理任务提交失败: {e}')
+        log_action('PREPROCESSING_FAILED', f'预处理任务提交失败: MRI ID={mri_id}, Error={str(e)}')
         return jsonify({
             'success': False,
             'error': str(e)
@@ -383,7 +503,7 @@ def upload_mri_general():
 
             # ========== 新增：文件去重检查 ==========
             from app.utils.file_deduplication import check_and_register_file
-            
+
             dup_info = check_and_register_file(
                 file_path=filepath,
                 metadata={
@@ -392,7 +512,7 @@ def upload_mri_general():
                     'upload_time': datetime.utcnow().isoformat()
                 }
             )
-            
+
             if dup_info['is_duplicate']:
                 flash(f'⚠️ 检测到重复文件，已节省 {dup_info["saved_space"] / 1024:.2f} KB 存储空间', 'warning')
                 logger.info(f"文件去重: {filepath}, 节省空间: {dup_info['saved_space']} bytes")
@@ -423,7 +543,7 @@ def upload_mri_general():
         else:
             flash('不支持的文件格式，请上传.nii或.gz文件', 'error')
 
-    patients = Patient.query.filter_by(doctor_id=current_user.id).all()
+    patients = Patient.query.filter_by(doctor_id=current_user.id, is_deleted=False).all()
     return render_template('upload_mri.html', form=form, patients=patients)
 
 
@@ -569,7 +689,7 @@ def upload_mri_patient(patient_id):
 
             # ========== 新增：文件去重检查 ==========
             from app.utils.file_deduplication import check_and_register_file
-            
+
             dup_info = check_and_register_file(
                 file_path=filepath,
                 metadata={
@@ -578,7 +698,7 @@ def upload_mri_patient(patient_id):
                     'upload_time': datetime.utcnow().isoformat()
                 }
             )
-            
+
             if dup_info['is_duplicate']:
                 flash(f'⚠️ 检测到重复文件，已节省 {dup_info["saved_space"] / 1024:.2f} KB 存储空间', 'warning')
                 logger.info(f"文件去重: {filepath}, 节省空间: {dup_info['saved_space']} bytes")
@@ -613,9 +733,190 @@ def upload_mri_patient(patient_id):
     return render_template('upload_mri.html', form=form, patients=patients)
 
 
+@main_bp.route('/api/upload/batch-mri', methods=['POST'])
+@login_required
+def api_batch_upload_mri():
+    """
+    批量上传MRI文件API
+    
+    Request:
+        - files: 多个NIfTI文件
+        - patient_id: 患者ID
+        - scan_type: 扫描类型（可选）
+        - notes: 备注（可选）
+    
+    Returns:
+        JSON响应，包含成功和失败的文件列表
+    """
+    try:
+        # 1. 获取表单数据
+        patient_id = request.form.get('patient_id')
+        scan_type = request.form.get('scan_type', 'T1')
+        notes = request.form.get('notes', '')
+        
+        if not patient_id:
+            return jsonify({
+                'success': False,
+                'error': '缺少患者ID'
+            }), 400
+        
+        patient = Patient.query.get_or_404(int(patient_id))
+        
+        # 2. 权限检查
+        if patient.doctor_id != current_user.id and current_user.role != 'researcher':
+            return jsonify({
+                'success': False,
+                'error': '没有权限为此患者上传文件'
+            }), 403
+        
+        # 3. 获取上传的文件列表
+        if 'files' not in request.files:
+            return jsonify({
+                'success': False,
+                'error': '没有接收到文件'
+            }), 400
+        
+        files = request.files.getlist('files')
+        
+        if not files or all(f.filename == '' for f in files):
+            return jsonify({
+                'success': False,
+                'error': '没有选择文件'
+            }), 400
+        
+        # 4. 准备上传目录
+        upload_folder = current_app.config['UPLOAD_FOLDER']
+        patient_folder = os.path.join(upload_folder, str(patient.id))
+        os.makedirs(patient_folder, exist_ok=True)
+        
+        # 5. 导入工具模块
+        from app.utils.file_deduplication import check_and_register_file
+        from app.utils.file_validator import validate_nifti_file
+        
+        # 6. 批量处理文件
+        results = {
+            'success': [],
+            'failed': [],
+            'duplicates': []
+        }
+        
+        for file in files:
+            if file.filename == '':
+                continue
+            
+            filename = secure_filename(file.filename)
+            
+            # 验证文件格式
+            if not allowed_file(filename):
+                results['failed'].append({
+                    'filename': filename,
+                    'error': '不支持的文件格式'
+                })
+                continue
+            
+            try:
+                # 生成唯一文件名
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+                unique_filename = f"{timestamp}_{filename}"
+                filepath = os.path.join(patient_folder, unique_filename)
+                
+                # 保存文件
+                file.save(filepath)
+                
+                # 验证NIfTI文件完整性
+                is_valid, validation_msg = validate_nifti_file(filepath)
+                if not is_valid:
+                    os.remove(filepath)
+                    results['failed'].append({
+                        'filename': filename,
+                        'error': f'文件验证失败: {validation_msg}'
+                    })
+                    continue
+                
+                # 文件去重检查
+                dup_info = check_and_register_file(
+                    file_path=filepath,
+                    metadata={
+                        'patient_id': patient.id,
+                        'uploaded_by': current_user.id,
+                        'upload_time': datetime.utcnow().isoformat(),
+                        'batch_upload': True
+                    }
+                )
+                
+                if dup_info['is_duplicate']:
+                    results['duplicates'].append({
+                        'filename': filename,
+                        'saved_space_kb': round(dup_info['saved_space'] / 1024, 2),
+                        'original_files': dup_info['original_files']
+                    })
+                
+                # 获取文件大小
+                file_size = os.path.getsize(filepath)
+                
+                # 创建MRI扫描记录
+                mri_scan = MRIScan(
+                    patient_id=patient.id,
+                    file_path=filepath,
+                    original_filename=filename,
+                    file_size=file_size,
+                    scan_type=scan_type,
+                    notes=notes,
+                    uploaded_by=current_user.id
+                )
+                
+                db.session.add(mri_scan)
+                db.session.commit()
+                
+                results['success'].append({
+                    'filename': filename,
+                    'mri_scan_id': mri_scan.id,
+                    'file_size_mb': round(file_size / (1024 * 1024), 2),
+                    'is_duplicate': dup_info['is_duplicate']
+                })
+                
+                # 记录日志
+                log_action('MRI_BATCH_UPLOADED', 
+                          f'批量上传MRI: {filename} (患者: {patient.name})')
+                
+            except Exception as e:
+                db.session.rollback()
+                current_app.logger.error(f'批量上传单个文件失败: {e}', exc_info=True)
+                results['failed'].append({
+                    'filename': filename,
+                    'error': str(e)
+                })
+        
+        # 7. 返回结果
+        total_success = len(results['success'])
+        total_failed = len(results['failed'])
+        total_duplicates = len(results['duplicates'])
+        
+        return jsonify({
+            'success': True,
+            'message': f'批量上传完成: 成功 {total_success} 个, 失败 {total_failed} 个, 重复 {total_duplicates} 个',
+            'results': results,
+            'summary': {
+                'total': len(files),
+                'success_count': total_success,
+                'failed_count': total_failed,
+                'duplicate_count': total_duplicates,
+                'total_saved_space_kb': sum(d['saved_space_kb'] for d in results['duplicates'])
+            }
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f'批量上传失败: {e}', exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': f'批量上传失败: {str(e)}'
+        }), 500
+
+
 @main_bp.route('/analysis/tasks')
 @login_required
-def analysis_tasks():
+def analysis_tasks_page():
     """分析任务管理页面"""
     return render_template('analysis_tasks.html')
 
@@ -695,7 +996,7 @@ def api_cancel_task(task_id):
     """取消正在运行的任务"""
     try:
         success = cancel_task(task_id)
-        
+
         if success:
             log_action('TASK_CANCELLED', f'用户取消了任务: {task_id}')
             return jsonify({
@@ -837,7 +1138,8 @@ def api_search_patients():
         db.or_(
             Patient.name.like(f'%{query}%'),
             Patient.patient_id.like(f'%{query}%')
-        )
+        ),
+        Patient.is_deleted == False
     ).limit(10).all()
 
     return jsonify({
@@ -854,11 +1156,16 @@ def api_search_patients():
 @login_required
 def api_dashboard_statistics():
     """获取仪表盘统计数据 API"""
-    total_patients = Patient.query.count()
-    analyzed_results = AnalysisResult.query.all()
+    total_patients = Patient.query.filter_by(is_deleted=False).count()
+    analyzed_results = AnalysisResult.query.join(Patient).filter(
+        Patient.is_deleted == False
+    ).all()
     asd_count = sum(1 for r in analyzed_results if r.prediction == 'ASD')
     nc_count = sum(1 for r in analyzed_results if r.prediction == 'NC')
-    pending_scans = MRIScan.query.filter(~MRIScan.analysis_results.any()).count()
+    pending_scans = MRIScan.query.join(Patient).filter(
+        Patient.is_deleted == False,
+        ~MRIScan.analysis_results.any()
+    ).count()
 
     return jsonify({
         'total_patients': total_patients,
@@ -881,5 +1188,3 @@ def internal_error(error):
     """500错误处理"""
     db.session.rollback()
     return render_template('errors/500.html'), 500
-
-

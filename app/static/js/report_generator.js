@@ -27,6 +27,19 @@ class ReportGenerator {
     createReportHTML() {
         const { patient, analysis, brain } = this.reportData;
 
+        // 处理脑区数据 - 支持多种格式
+        let regionTableHTML = '';
+        if (brain && brain.region_values) {
+            // 如果 region_values 是数组格式（来自 API）
+            if (Array.isArray(brain.region_values)) {
+                regionTableHTML = this.createRegionTableFromArray(brain.region_values);
+            }
+            // 如果 region_values 是对象格式（来自 features_used）
+            else if (typeof brain.region_values === 'object') {
+                regionTableHTML = this.createRegionTableFromObject(brain.region_values);
+            }
+        }
+
         return `
 <!DOCTYPE html>
 <html>
@@ -182,33 +195,7 @@ class ReportGenerator {
         </div>
     </div>
     
-    ${brain && brain.region_values ? `
-    <div class="section">
-        <h2 class="section-title">关键脑区灰质体积分析</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th>脑区</th>
-                    <th>平均体积</th>
-                    <th>中位数</th>
-                    <th>标准差</th>
-                    <th>总体积</th>
-                </tr>
-            </thead>
-            <tbody>
-                ${Object.entries(brain.region_values).map(([region, data]) => `
-                <tr>
-                    <td><strong>${region}</strong></td>
-                    <td>${data.mean?.toFixed(2) || 'N/A'}</td>
-                    <td>${data.median?.toFixed(2) || 'N/A'}</td>
-                    <td>${data.std?.toFixed(2) || 'N/A'}</td>
-                    <td>${data.volume || 'N/A'}</td>
-                </tr>
-                `).join('')}
-            </tbody>
-        </table>
-    </div>
-    ` : ''}
+    ${regionTableHTML}
     
     <div class="section">
         <h2 class="section-title">模型性能指标</h2>
@@ -257,6 +244,70 @@ class ReportGenerator {
     </div>
 </body>
 </html>`;
+    }
+
+    /**
+     * 从数组格式的脑区数据创建表格
+     * @param {Array} regions - 脑区数组 [{name, value}, ...]
+     */
+    createRegionTableFromArray(regions) {
+        if (!regions || regions.length === 0) return '';
+
+        return `
+    <div class="section">
+        <h2 class="section-title">关键脑区贡献度分析</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>脑区名称</th>
+                    <th>贡献度/体积</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${regions.map(region => `
+                <tr>
+                    <td><strong>${region.name || region.regionId || '未知'}</strong></td>
+                    <td>${region.value !== undefined ? region.value.toFixed(4) : (region.activationLevel ? region.activationLevel.toFixed(3) : 'N/A')}</td>
+                </tr>
+                `).join('')}
+            </tbody>
+        </table>
+    </div>`;
+    }
+
+    /**
+     * 从对象格式的脑区数据创建表格
+     * @param {Object} regions - 脑区对象 {RegionName: {mean, median, std, volume}}
+     */
+    createRegionTableFromObject(regions) {
+        if (!regions || Object.keys(regions).length === 0) return '';
+
+        return `
+    <div class="section">
+        <h2 class="section-title">关键脑区灰质体积分析</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>脑区</th>
+                    <th>平均体积</th>
+                    <th>中位数</th>
+                    <th>标准差</th>
+                    <th>总体积</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${Object.entries(regions).map(([region, data]) => `
+                <tr>
+                    <td><strong>${region}</strong></td>
+                    <td>${data.mean?.toFixed(2) || 'N/A'}</td>
+                    <td>${data.median?.toFixed(2) || 'N/A'}</td>
+                    <td>${data.std?.toFixed(2) || 'N/A'}</td>
+                    <td>${data.volume || 'N/A'}</td>
+                </tr>
+                `).join('')}
+            </tbody>
+        </table>
+    </div>`;
     }
 }
 

@@ -256,3 +256,86 @@ class TaskManager:
                     stats[task.status] += 1
             
             return stats
+
+
+# 全局任务管理器实例
+task_manager = TaskManager(max_concurrent=3)
+
+
+def submit_preprocessing_task(
+    mri_scan_id: int,
+    patient_id: int,
+    user_id: int,
+    config: dict = None,
+    save_intermediate: bool = False
+) -> str:
+    """
+    提交独立的MRI预处理任务
+    
+    Args:
+        mri_scan_id: MRI扫描记录ID
+        patient_id: 患者ID
+        user_id: 用户ID
+        config: 预处理配置参数
+        save_intermediate: 是否保存中间结果
+    
+    Returns:
+        task_id: 任务ID
+    
+    Raises:
+        RuntimeError: 如果达到最大并发任务数
+    """
+    from app import db
+    from app.models import AnalysisTask, MRIScan, Patient
+    from datetime import datetime
+    import uuid
+    from logging import getLogger
+    
+    logger = getLogger(__name__)
+    
+    # 检查是否可以启动新任务
+    if not task_manager.can_start_task():
+        raise RuntimeError(f"已达到最大并发任务数 ({task_manager.max_concurrent})，请稍后重试")
+    
+    # 生成任务ID
+    task_id = f"preprocess_{uuid.uuid4().hex[:12]}"
+    
+    try:
+        # 创建数据库任务记录
+        task = AnalysisTask(
+            task_id=task_id,
+            patient_id=patient_id,
+            mri_scan_id=mri_scan_id,
+            user_id=user_id,
+            status='pending',
+            progress=0,
+            created_at=datetime.utcnow()
+        )
+        
+        db.session.add(task)
+        db.session.commit()
+        
+        # 添加到任务管理器
+        managed_task = task_manager.add_task(task_id)
+        
+        # 导入并启动后台线程
+        from tasks.analysis_tasks import run_preprocessing_task
+        import threading
+        
+        thread = threading.Thread(
+            target=run_preprocessing_task,
+            args=(task_id, mri_scan_id, patient_id, user_id, config, save_intermediate),
+            daemon=True
+        )
+        
+        managed_task.thread = thread
+        thread.start()
+        
+        logger.info(f"✅ 预处理任务已提交: {task_id}")
+        
+        return task_id
+    
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"❌ 提交预处理任务失败: {e}", exc_info=True)
+        raise

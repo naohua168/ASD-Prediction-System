@@ -5,6 +5,7 @@
 // WebSocket连接实例
 let socket = null;
 const taskSubscriptions = new Map();
+const taskStartTimes = new Map(); // 记录任务开始时间
 
 // 初始化WebSocket连接
 function initWebSocket() {
@@ -128,9 +129,15 @@ function subscribeTask(taskId, callback) {
     }
 
     taskSubscriptions.set(taskId, callback);
+    taskStartTimes.set(taskId, Date.now()); // 记录开始时间
     socket.emit('subscribe_task', {task_id: taskId});
 
     console.log(`📡 已订阅任务: ${taskId}`);
+}
+
+// 获取任务开始时间
+function getTaskStartTime(taskId) {
+    return taskStartTimes.get(taskId) || Date.now();
 }
 
 // 取消订阅任务
@@ -147,6 +154,8 @@ function updateProgressBar(taskId, progress, status, message) {
     const progressBar = document.querySelector(`[data-task-id="${taskId}"] .progress-bar`);
     const statusBadge = document.querySelector(`[data-task-id="${taskId}"] .status-badge`);
     const messageText = document.querySelector(`[data-task-id="${taskId}"] .progress-message`);
+    const progressPercentage = document.querySelector(`[data-task-id="${taskId}"] .progress-percentage`);
+    const estimatedTime = document.querySelector(`[data-task-id="${taskId}"] .estimated-time`);
 
     if (progressBar) {
         progressBar.style.width = `${progress}%`;
@@ -159,8 +168,13 @@ function updateProgressBar(taskId, progress, status, message) {
             progressBar.classList.add('bg-primary', 'progress-bar-striped', 'progress-bar-animated');
         } else if (status === 'completed') {
             progressBar.classList.add('bg-success');
+            progressBar.classList.remove('progress-bar-striped', 'progress-bar-animated');
         } else if (status === 'failed') {
             progressBar.classList.add('bg-danger');
+            progressBar.classList.remove('progress-bar-striped', 'progress-bar-animated');
+        } else if (status === 'cancelled') {
+            progressBar.classList.add('bg-warning');
+            progressBar.classList.remove('progress-bar-striped', 'progress-bar-animated');
         }
     }
 
@@ -170,7 +184,27 @@ function updateProgressBar(taskId, progress, status, message) {
     }
 
     if (messageText) {
-        messageText.textContent = message;
+        messageText.textContent = message || '处理中...';
+        
+        // 添加动画效果
+        messageText.style.opacity = '0';
+        setTimeout(() => {
+            messageText.style.transition = 'opacity 0.3s ease-in-out';
+            messageText.style.opacity = '1';
+        }, 50);
+    }
+    
+    if (progressPercentage) {
+        progressPercentage.textContent = `${progress}%`;
+    }
+    
+    // 估算剩余时间（基于进度）
+    if (estimatedTime && status === 'running' && progress > 0) {
+        const elapsed = Date.now() - getTaskStartTime(taskId);
+        const estimated = (elapsed / progress) * (100 - progress);
+        const minutes = Math.floor(estimated / 60000);
+        const seconds = Math.floor((estimated % 60000) / 1000);
+        estimatedTime.textContent = `预计剩余: ${minutes}分${seconds}秒`;
     }
 }
 
@@ -180,7 +214,8 @@ function getStatusText(status) {
         'pending': '等待中',
         'running': '运行中',
         'completed': '已完成',
-        'failed': '失败'
+        'failed': '失败',
+        'cancelled': '已取消'
     };
     return statusMap[status] || status;
 }
@@ -191,7 +226,8 @@ function getStatusColor(status) {
         'pending': 'secondary',
         'running': 'primary',
         'completed': 'success',
-        'failed': 'danger'
+        'failed': 'danger',
+        'cancelled': 'warning'
     };
     return colorMap[status] || 'secondary';
 }
@@ -279,6 +315,34 @@ function confirmAction(message, callback) {
     }
 }
 
+// 取消任务
+function cancelTask(taskId, callback) {
+    if (!confirm('确定要取消此任务吗？')) {
+        return;
+    }
+    
+    fetch(`/api/analysis/cancel/${taskId}`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': getCSRFToken()
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showNotification('任务已取消', '分析任务已成功取消', 'warning');
+            if (callback) callback();
+        } else {
+            showNotification('取消失败', data.error || '未知错误', 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        showNotification('错误', '网络请求失败', 'error');
+    });
+}
+
 // 页面加载时初始化WebSocket
 document.addEventListener('DOMContentLoaded', () => {
     initWebSocket();
@@ -291,6 +355,7 @@ if (typeof module !== 'undefined' && module.exports) {
         startBatchAnalysis,
         subscribeTask,
         unsubscribeTask,
+        cancelTask,
         showNotification,
         confirmAction
     };

@@ -147,6 +147,7 @@
     <div class="controls">
         <button onclick="resetView()">🔄 重置视角</button>
         <button onclick="toggleRotation()" id="rotateBtn">▶️ 自动旋转</button>
+        <button onclick="toggleHeatmap()">🔥 切换热力图</button>
         <button onclick="toggleColor('ASD')">🔴 ASD模式</button>
         <button onclick="toggleColor('NC')">🔵 NC模式</button>
     </div>
@@ -158,10 +159,13 @@
 
     <!-- 引入脑可视化工具 -->
     <script src="{{ url_for('static', filename='js/brain_visualization.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/brain_heatmap.js') }}"></script>
     
     <script>
         let visualizer = null;
+        let heatmapRenderer = null;
         let isRotating = false;
+        let aal3Regions = null;
         
         // 页面加载完成后初始化
         window.addEventListener('load', function() {
@@ -176,10 +180,13 @@
                     enableZoom: true
                 });
                 
-                // 加载真实数据（需要至少有一个分析结果）
-                setTimeout(() => {
-                    loadRealData();
-                }, 500);
+                // 加载AAL3脑区映射数据
+                loadAAL3Regions().then(() => {
+                    // 加载真实数据
+                    setTimeout(() => {
+                        loadRealData();
+                    }, 500);
+                });
                 
             } catch (error) {
                 console.error('❌ 初始化失败:', error);
@@ -188,72 +195,120 @@
             }
         });
         
-        // 加载真实数据（从API获取）
+        // 加载AAL3脑区映射
+        async function loadAAL3Regions() {
+            try {
+                const response = await fetch("{{ url_for('static', filename='data/brain_atlas/aal3_regions.json') }}");
+                aal3Regions = await response.json();
+                console.log('✅ AAL3脑区映射加载完成:', aal3Regions.total_regions, '个脑区');
+            } catch (error) {
+                console.error('❌ 加载AAL3映射失败:', error);
+                aal3Regions = null;
+            }
+        }
+        
+        // 加载真实数据（从 API获取）
         function loadRealData() {
             const analysisId = 1; // 修改为你的分析ID
-            
-            console.log(`🔄 正在加载分析ID ${analysisId} 的网格数据...`);
-            
-            fetch(`/api/analysis/${analysisId}/brain-mesh`)
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP错误: ${response.status}`);
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    if (data.success && data.mesh_data) {
-                        console.log('✅ 接收到网格数据');
-                        console.log('  - 左半球顶点:', data.mesh_data.left_hemisphere.coordinates.length);
-                        console.log('  - 右半球顶点:', data.mesh_data.right_hemisphere.coordinates.length);
+                    
+            console.log(`🔄 正在加载分析ID ${analysisId} 的数据...`);
+                    
+            Promise.all([
+                fetch(`/api/analysis/${analysisId}/brain-mesh`).then(r => r.json()),
+                fetch(`/api/analysis/${analysisId}/brain-data`).then(r => r.json())
+            ])
+            .then(([meshResponse, brainDataResponse]) => {
+                if (!meshResponse.success) {
+                    throw new Error(meshResponse.error || '获取网格数据失败');
+                }
                         
-                        // 创建脑部网格
-                        visualizer.createBrainMesh(data.mesh_data);
+                console.log('✅ 接收到网格数据');
                         
-                        // 应用预测颜色
-                        if (data.prediction && data.confidence) {
-                            visualizer.applyPredictionColors(data.prediction, data.confidence);
-                        }
+                // 创建脑部网格
+                visualizer.createBrainMesh(meshResponse.mesh_data);
                         
-                        // 更新UI
-                        document.getElementById('loading').style.display = 'none';
-                        document.getElementById('status').textContent = '✅ 加载成功';
-                        document.getElementById('prediction').textContent = data.prediction || '-';
-                        document.getElementById('confidence').textContent = 
-                            data.confidence ? `${(data.confidence * 100).toFixed(1)}%` : '-';
+                // 应用预测颜色
+                if (meshResponse.prediction && meshResponse.confidence) {
+                    visualizer.applyPredictionColors(meshResponse.prediction, meshResponse.confidence);
+                }
                         
-                        // 计算统计信息
-                        const totalVertices = data.mesh_data.left_hemisphere.coordinates.length + 
-                                              data.mesh_data.right_hemisphere.coordinates.length;
-                        const totalFaces = data.mesh_data.left_hemisphere.faces.length + 
-                                           data.mesh_data.right_hemisphere.faces.length;
+                // 初始化热力图渲染器
+                heatmapRenderer = new BrainHeatmapRenderer(visualizer);
                         
-                        document.getElementById('vertices').textContent = totalVertices.toLocaleString();
-                        document.getElementById('faces').textContent = totalFaces.toLocaleString();
+                // 应用脑区激活热力图
+                if (brainDataResponse.success && aal3Regions) {
+                    heatmapRenderer.applyHeatmap(
+                        brainDataResponse.region_activations,
+                        aal3Regions.region_centroids
+                    );
+                            
+                    // 添加鼠标交互
+                    setupRegionInteraction();
+                }
                         
-                        console.log('✅ 真实数据加载完成');
-                        console.log(`  - 总顶点数: ${totalVertices.toLocaleString()}`);
-                        console.log(`  - 总面片数: ${totalFaces.toLocaleString()}`);
-                    } else {
-                        throw new Error(data.error || '获取数据失败');
-                    }
-                })
-                .catch(error => {
-                    console.error('❌ 加载失败:', error);
-                    document.getElementById('status').textContent = '❌ 加载失败';
-                    document.getElementById('loading').innerHTML = `
-                        <div style="color: red; font-size: 16px;">
-                            <div style="margin-bottom: 10px;">⚠️ 加载失败</div>
-                            <div style="font-size: 12px; color: #666;">${error.message}</div>
-                            <div style="margin-top: 15px; font-size: 12px;">
-                                请确保：<br>
-                                1. 已登录系统<br>
-                                2. 存在分析结果（ID=${analysisId}）<br>
-                                3. MRI文件可用
-                            </div>
+                // 更新UI
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('status').textContent = '✅ 加载成功';
+                document.getElementById('prediction').textContent = meshResponse.prediction || '-';
+                document.getElementById('confidence').textContent = 
+                    meshResponse.confidence ? `${(meshResponse.confidence * 100).toFixed(1)}%` : '-';
+                        
+                // 计算统计信息
+                const totalVertices = meshResponse.mesh_data.left_hemisphere.coordinates.length + 
+                                      meshResponse.mesh_data.right_hemisphere.coordinates.length;
+                const totalFaces = meshResponse.mesh_data.left_hemisphere.faces.length + 
+                                   meshResponse.mesh_data.right_hemisphere.faces.length;
+                        
+                document.getElementById('vertices').textContent = totalVertices.toLocaleString();
+                document.getElementById('faces').textContent = totalFaces.toLocaleString();
+                        
+                console.log('✅ 真实数据加载完成');
+                console.log(`  - 总顶点数: ${totalVertices.toLocaleString()}`);
+                console.log(`  - 总面片数: ${totalFaces.toLocaleString()}`);
+            })
+            .catch(error => {
+                console.error('❌ 加载失败:', error);
+                document.getElementById('status').textContent = '❌ 加载失败';
+                document.getElementById('loading').innerHTML = `
+                    <div style="color: red; font-size: 16px;">
+                        <div style="margin-bottom: 10px;">⚠️ 加载失败</div>
+                        <div style="font-size: 12px; color: #666;">${error.message}</div>
+                        <div style="margin-top: 15px; font-size: 12px;">
+                            请确保：<br>
+                            1. 已登录系统<br>
+                            2. 存在分析结果（ID=${analysisId}）<br>
+                            3. MRI文件可用
                         </div>
-                    `;
-                });
+                    </div>
+                `;
+            });
+        }
+        
+        // 设置脑区交互
+        function setupRegionInteraction() {
+            const canvas = visualizer.renderer.domElement;
+            
+            canvas.addEventListener('click', (event) => {
+                const rect = canvas.getBoundingClientRect();
+                const mouse = new THREE.Vector2();
+                mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+                mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+                
+                // 射线检测
+                const raycaster = new THREE.Raycaster();
+                raycaster.setFromCamera(mouse, visualizer.camera);
+                
+                const intersects = raycaster.intersectObjects(heatmapRenderer.regionMarkers);
+                
+                if (intersects.length > 0) {
+                    const marker = intersects[0].object;
+                    heatmapRenderer.highlightRegion(marker.userData.regionId);
+                } else {
+                    heatmapRenderer.clearInfoPanel();
+                }
+            });
+            
+            console.log('✅ 脑区交互已启用');
         }
         
         // 生成模拟半球数据（用于测试）
@@ -318,6 +373,21 @@
             }
         }
         
+        function toggleHeatmap() {
+            if (heatmapRenderer && heatmapRenderer.heatmapData) {
+                if (heatmapRenderer.regionMarkers.length > 0) {
+                    heatmapRenderer.clearMarkers();
+                    console.log('🔵 热力图已隐藏');
+                } else {
+                    heatmapRenderer.applyHeatmap(
+                        heatmapRenderer.heatmapData,
+                        aal3Regions.region_centroids
+                    );
+                    console.log('🔴 热力图已显示');
+                }
+            }
+        }
+        
         function toggleColor(mode) {
             if (visualizer) {
                 const confidence = 0.875;
@@ -336,6 +406,10 @@
                 case ' ':
                     e.preventDefault();
                     toggleRotation();
+                    break;
+                case 'h':
+                case 'H':
+                    toggleHeatmap();
                     break;
             }
         });

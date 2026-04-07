@@ -50,8 +50,16 @@
 
         <div style="margin: 30px 0;">
             <h3 style="color: #2563eb; margin-bottom: 15px;">🧬 脑部灰质体积分析</h3>
-            <div class="brain-visualization" id="brainContainer" style="height: 600px;">
+            <div class="brain-visualization" id="brainContainer" style="height: 600px; position: relative;">
                 <canvas id="brainCanvas"></canvas>
+                <!-- 控制按钮 -->
+                <div style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+                            display: flex; gap: 10px; background: rgba(255,255,255,0.9); 
+                            padding: 10px 20px; border-radius: 25px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+                    <button class="brain-btn" onclick="resetBrainView()">🔄 重置视角</button>
+                    <button class="brain-btn" onclick="toggleAutoRotate()" id="rotateBtn">▶️ 旋转</button>
+                    <button class="brain-btn" onclick="toggleHeatmap()" id="heatmapBtn">🔥 热力图</button>
+                </div>
             </div>
         </div>
 
@@ -87,25 +95,30 @@
     </div>
 </div>
 {% endblock %}
-// ... existing code ...
 
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/brain_visualization.js') }}"></script>
+<script src="{{ url_for('static', filename='js/brain_heatmap.js') }}"></script>
 <script src="{{ url_for('static', filename='js/charts.js') }}"></script>
 <script src="{{ url_for('static', filename='js/report_generator.js') }}"></script>
 <script>
-let brainViz, medicalCharts, reportGen;
+let brainViz, heatmapRenderer, medicalCharts, reportGen;
 let autoRotateEnabled = false;
+let aal3Regions = null;
 
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', async function() {
     // 初始化3D脑部可视化（使用真实网格）
+    const container = document.getElementById('brainContainer');
     brainViz = new BrainVisualizer('brainContainer', {
-        width: document.getElementById('brainContainer').clientWidth,
+        width: container.clientWidth || 800,
         height: 600,
         enableRotation: true,
         enableZoom: true,
         analysisId: {{ analysis.id }}  // 传入分析ID以加载真实网格
     });
+
+    // 加载AAL3脑区映射数据
+    await loadAAL3Regions();
 
     medicalCharts = new MedicalCharts();
     reportGen = new ReportGenerator();
@@ -114,6 +127,7 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 async function loadCharts() {
+    // 加载ROC曲线和混淆矩阵
     const rocData = {
         auc: {{ model_metrics.auc or 0.90 }},
         points: generateROCPoints({{ model_metrics.auc or 0.90 }})
@@ -127,6 +141,54 @@ async function loadCharts() {
         tn: {{ model_metrics.tn or 88 }}
     };
     medicalCharts.createConfusionMatrix('confusionMatrix', matrix);
+
+    // 加载脑区体积数据和热力图
+    await loadBrainRegionData();
+}
+
+// 加载AAL3脑区映射
+async function loadAAL3Regions() {
+    try {
+        const response = await fetch("{{ url_for('static', filename='data/brain_atlas/aal3_regions.json') }}");
+        aal3Regions = await response.json();
+        console.log('✅ AAL3脑区映射加载完成:', Object.keys(aal3Regions.region_centroids).length, '个脑区');
+    } catch (error) {
+        console.error('❌ 加载AAL3映射失败:', error);
+        aal3Regions = null;
+    }
+}
+
+async function loadBrainRegionData() {
+    try {
+        // 从 API 获取脑区数据
+        const response = await fetch(`/api/analysis/{{ analysis.id }}/brain-data`);
+        const data = await response.json();
+
+        if (data.success && data.region_values) {
+            // 转换数据格式为图表所需格式
+            const regionVolumeData = {};
+            data.region_values.forEach(region => {
+                regionVolumeData[region.name] = {
+                    volume: region.value
+                };
+            });
+
+            // 创建体积柱状图
+            medicalCharts.createRegionVolumeChart('volumeChart', regionVolumeData);
+            
+            // 应用热力图(如果有AAL3数据和激活水平)
+            if (aal3Regions && data.region_activations && data.region_activations.length > 0) {
+                heatmapRenderer = new BrainHeatmapRenderer(brainViz);
+                heatmapRenderer.applyHeatmap(
+                    data.region_activations,
+                    aal3Regions.region_centroids
+                );
+                console.log('🎨 热力图已应用:', data.region_activations.length, '个脑区');
+            }
+        }
+    } catch (error) {
+        console.error('加载脑区数据失败:', error);
+    }
 }
 
 function generateROCPoints(auc) {
@@ -150,15 +212,63 @@ function toggleAutoRotate() {
 // 清除高亮
 function clearHighlights() {
     if (brainViz && brainViz.brainMesh) {
-        brainViz.brainMesh.material.color.setRGB(
-            brainViz.originalColors.r,
-            brainViz.originalColors.g,
-            brainViz.originalColors.b
-        );
+        // 检查是否为双半球网格
+        if (brainViz.brainMesh.type === 'Group') {
+            brainViz.brainMesh.children.forEach((mesh, index) => {
+                if (mesh.material && brainViz.originalColors) {
+                    mesh.material.color.setHex(
+                        index === 0 ? brainViz.originalColors.left : brainViz.originalColors.right
+                    );
+                }
+            });
+        } else if (brainViz.originalColors) {
+            brainViz.brainMesh.material.color.setRGB(
+                brainViz.originalColors.r,
+                brainViz.originalColors.g,
+                brainViz.originalColors.b
+            );
+        }
+    }
+}
+
+// 重置视角
+function resetBrainView() {
+    if (brainViz) {
+        brainViz.resetView();
+    }
+}
+
+// 切换热力图显示
+function toggleHeatmap() {
+    if (!heatmapRenderer) {
+        alert('热力图数据未加载');
+        return;
+    }
+    
+    const btn = document.getElementById('heatmapBtn');
+    if (heatmapRenderer.regionMarkers.length > 0) {
+        heatmapRenderer.clearMarkers();
+        btn.textContent = '🔥 显示热力图';
+        console.log('🔵 热力图已隐藏');
+    } else {
+        // 重新应用热力图
+        fetch(`/api/analysis/{{ analysis.id }}/brain-data`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.success && aal3Regions) {
+                    heatmapRenderer.applyHeatmap(
+                        data.region_activations,
+                        aal3Regions.region_centroids
+                    );
+                    btn.textContent = '🔵 隐藏热力图';
+                    console.log('🔴 热力图已显示');
+                }
+            });
     }
 }
 
 function generatePDF() {
+    // 准备患者数据
     const patientData = {
         id: '{{ patient.patient_id }}',
         name: '{{ patient.name }}',
@@ -168,15 +278,30 @@ function generatePDF() {
         ados_g_score: {{ patient.ados_g_score or 'null' }}
     };
 
+    // 准备分析结果数据
     const analysisResult = {
         prediction: '{{ analysis.prediction }}',
         probability: {{ analysis.probability }},
         confidence: {{ analysis.confidence }},
-        model_version: '{{ analysis.model_version }}',
-        created_at: '{{ analysis.created_at }}'
+        model_version: '{{ analysis.model_version or "v1.0" }}',
+        created_at: '{{ analysis.created_at.strftime("%Y-%m-%d %H:%M:%S") if analysis.created_at else "" }}'
     };
 
-    reportGen.generateReport(patientData, analysisResult, {{ analysis.features_used|safe }});
+    // 准备脑区数据（从 features_used 中提取）
+    let brainData = null;
+    try {
+        const featuresUsed = {{ analysis.features_used|safe if analysis.features_used else '{}' }};
+        if (featuresUsed && featuresUsed.brain_regions) {
+            brainData = {
+                region_values: featuresUsed.brain_regions
+            };
+        }
+    } catch (e) {
+        console.warn('解析脑区数据失败:', e);
+    }
+
+    // 生成报告
+    reportGen.generateReport(patientData, analysisResult, brainData);
 }
 </script>
 {% endblock %}

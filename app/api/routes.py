@@ -1,5 +1,6 @@
 import os
 import json
+from datetime import datetime
 from flask import jsonify, request, current_app
 from flask_login import login_required, current_user
 from sqlalchemy.orm import joinedload
@@ -177,6 +178,45 @@ def get_patient(patient_id):
     })
 
 
+@api_bp.route('/patients/<int:patient_id>', methods=['DELETE'])
+@login_required
+def delete_patient(patient_id):
+    """删除患者（软删除）"""
+    patient = Patient.query.get_or_404(patient_id)
+    
+    # 权限检查
+    if not check_patient_permission(patient):
+        return jsonify({'error': '没有权限'}), 403
+    
+    try:
+        # 使用软删除而非硬删除
+        patient.soft_delete()
+        
+        # 记录日志
+        from app.models import SystemLog
+        log_entry = SystemLog(
+            user_id=current_user.id,
+            action='PATIENT_SOFT_DELETED',
+            description=f'软删除患者: {patient.name} (ID: {patient.patient_id})',
+            ip_address=request.remote_addr
+        )
+        db.session.add(log_entry)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': f'患者 {patient.name} 已成功删除'
+        })
+    
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.error(f'删除患者失败: {e}', exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 @api_bp.route('/patients/<int:patient_id>/mri-scans')
 @login_required
 def get_patient_mri_scans(patient_id):
@@ -206,18 +246,25 @@ def get_patient_mri_scans(patient_id):
 def dashboard_statistics():
     """获取仪表盘统计数据"""
     if current_user.role == 'doctor':
-        total_patients = Patient.query.filter_by(doctor_id=current_user.id).count()
+        total_patients = Patient.query.filter_by(doctor_id=current_user.id, is_deleted=False).count()
         analyzed_results = AnalysisResult.query.join(Patient).filter(
-            Patient.doctor_id == current_user.id
+            Patient.doctor_id == current_user.id,
+            Patient.is_deleted == False
         ).all()
         pending_scans = MRIScan.query.join(Patient).filter(
             Patient.doctor_id == current_user.id,
+            Patient.is_deleted == False,
             ~MRIScan.analysis_results.any()
         ).count()
     else:
-        total_patients = Patient.query.count()
-        analyzed_results = AnalysisResult.query.all()
-        pending_scans = MRIScan.query.filter(~MRIScan.analysis_results.any()).count()
+        total_patients = Patient.query.filter_by(is_deleted=False).count()
+        analyzed_results = AnalysisResult.query.join(Patient).filter(
+            Patient.is_deleted == False
+        ).all()
+        pending_scans = MRIScan.query.join(Patient).filter(
+            Patient.is_deleted == False,
+            ~MRIScan.analysis_results.any()
+        ).count()
 
     asd_count = sum(1 for r in analyzed_results if r.prediction == 'ASD')
     nc_count = sum(1 for r in analyzed_results if r.prediction == 'NC')
@@ -245,7 +292,8 @@ def clinical_correlation():
         AnalysisResult, Patient.id == AnalysisResult.patient_id
     ).filter(
         ClinicalScore.score_type == 'ADOS',
-        AnalysisResult.prediction.isnot(None)
+        AnalysisResult.prediction.isnot(None),
+        Patient.is_deleted == False
     )
 
     if current_user.role == 'doctor':
@@ -285,10 +333,10 @@ def analysis_tasks():
     query = AnalysisResult.query.options(
         joinedload(AnalysisResult.patient),
         joinedload(AnalysisResult.mri_scan)
-    )
+    ).join(Patient).filter(Patient.is_deleted == False)
 
     if current_user.role == 'doctor':
-        query = query.join(Patient).filter(Patient.doctor_id == current_user.id)
+        query = query.filter(Patient.doctor_id == current_user.id)
 
     results = query.order_by(AnalysisResult.created_at.desc()).all()
 
@@ -346,6 +394,114 @@ def retry_analysis(task_id):
         })
     except Exception as e:
         current_app.logger.error(f'重试分析失败: {e}', exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@api_bp.route('/analysis/<int:analysis_id>/export', methods=['GET'])
+@login_required
+def export_analysis_result(analysis_id):
+    """导出分析结果为JSON或CSV格式"""
+    analysis = AnalysisResult.query.get_or_404(analysis_id)
+    
+    # 权限检查
+    if not check_patient_permission(analysis.patient):
+        return jsonify({'error': '没有权限'}), 403
+    
+    try:
+        # 获取请求参数
+        export_format = request.args.get('format', 'json').lower()
+        
+        # 准备导出数据
+        patient = analysis.patient
+        mri_scan = analysis.mri_scan
+        
+        features_used = json.loads(analysis.features_used) if analysis.features_used else {}
+        metrics = json.loads(analysis.metrics) if analysis.metrics else {}
+        
+        export_data = {
+            'export_info': {
+                'exported_at': datetime.utcnow().isoformat(),
+                'exported_by': current_user.username,
+                'format': export_format
+            },
+            'patient_info': {
+                'patient_id': patient.patient_id,
+                'name': patient.name,
+                'age': patient.age,
+                'gender': patient.gender,
+                'full_scale_iq': patient.full_scale_iq,
+                'ados_g_score': patient.ados_g_score,
+                'adi_r_score': patient.adi_r_score
+            },
+            'mri_info': {
+                'scan_id': mri_scan.id if mri_scan else None,
+                'filename': mri_scan.original_filename if mri_scan else None,
+                'scan_type': mri_scan.scan_type if mri_scan else None,
+                'scan_date': mri_scan.scan_date.isoformat() if mri_scan and mri_scan.scan_date else None
+            },
+            'analysis_result': {
+                'result_id': analysis.id,
+                'prediction': analysis.prediction,
+                'probability': analysis.probability,
+                'confidence': analysis.confidence,
+                'model_version': analysis.model_version,
+                'analyzed_at': analysis.created_at.isoformat()
+            },
+            'features_used': features_used,
+            'model_metrics': metrics
+        }
+        
+        # 根据格式返回不同响应
+        if export_format == 'csv':
+            import csv
+            import io
+            
+            # 创建CSV数据
+            output = io.StringIO()
+            writer = csv.writer(output)
+            
+            # 写入头部
+            writer.writerow(['字段', '值'])
+            writer.writerow(['患者ID', patient.patient_id])
+            writer.writerow(['姓名', patient.name])
+            writer.writerow(['年龄', patient.age])
+            writer.writerow(['性别', patient.gender])
+            writer.writerow(['预测结果', analysis.prediction])
+            writer.writerow(['预测概率', f"{analysis.probability:.4f}"])
+            writer.writerow(['置信度', f"{analysis.confidence:.4f}"])
+            writer.writerow(['模型版本', analysis.model_version])
+            writer.writerow(['分析时间', analysis.created_at.strftime('%Y-%m-%d %H:%M:%S')])
+            
+            # 添加脑区贡献度（如果有）
+            if 'brain_region_contributions' in features_used:
+                writer.writerow([])
+                writer.writerow(['脑区名称', '贡献度'])
+                for region, contribution in features_used['brain_region_contributions'].items():
+                    writer.writerow([region, f"{contribution:.4f}"])
+            
+            csv_content = output.getvalue()
+            output.close()
+            
+            from flask import Response
+            return Response(
+                csv_content,
+                mimetype='text/csv',
+                headers={
+                    'Content-Disposition': f'attachment; filename=analysis_{analysis_id}_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}.csv'
+                }
+            )
+        
+        else:  # JSON格式（默认）
+            from flask import jsonify
+            response = jsonify(export_data)
+            response.headers['Content-Disposition'] = f'attachment; filename=analysis_{analysis_id}_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}.json'
+            return response
+    
+    except Exception as e:
+        current_app.logger.error(f'导出分析结果失败: {e}', exc_info=True)
         return jsonify({
             'success': False,
             'error': str(e)
@@ -417,6 +573,11 @@ def get_analysis_brain_mesh(analysis_id):
 def get_analysis_brain_data(analysis_id):
     """
     获取分析结果的脑部可视化数据（兼容旧接口）
+    
+    优先级:
+    1. 数据库中存储的真实特征数据 (features_used)
+    2. 从MRI文件实时提取的真实数据
+    3. 模拟数据 (降级方案)
 
     Returns:
         JSON包含:
@@ -431,11 +592,14 @@ def get_analysis_brain_data(analysis_id):
     try:
         region_activations = []
         region_values = []
+        data_source = 'unknown'
 
+        # 优先级1: 尝试从数据库的 features_used 字段获取真实数据
         if analysis.features_used:
             try:
                 features = json.loads(analysis.features_used) if isinstance(analysis.features_used, str) else analysis.features_used
 
+                # 检查是否有 region_data 格式
                 if 'region_data' in features:
                     region_data = features['region_data']
 
@@ -450,19 +614,76 @@ def get_analysis_brain_data(analysis_id):
                             'name': region.get('name_cn', ''),
                             'value': region.get('volume', 0)
                         })
+                    
+                    if region_activations:
+                        data_source = 'database_features'
+                
+                # 检查是否有 brain_regions 格式 (来自 predict_with_selected_model)
+                elif 'brain_regions' in features:
+                    brain_regions = features['brain_regions']
+                    
+                    for region_name, contribution in brain_regions.items():
+                        # 尝试获取脑区ID
+                        region_id = None
+                        name_cn = region_name
+                        name_en = region_name
+                        
+                        from app.utils.aal3_region_mapper import aal3_mapper
+                        for rid, names in aal3_mapper.region_names.items():
+                            if names.get('en') == region_name or names.get('cn') == region_name:
+                                region_id = rid
+                                name_en = names.get('en', region_name)
+                                name_cn = names.get('cn', region_name)
+                                break
+                        
+                        if region_id is None:
+                            continue
+                        
+                        # contribution 可能是 SHAP 值或贡献度
+                        activation = abs(contribution) if isinstance(contribution, (int, float)) else 0.5
+                        
+                        region_activations.append({
+                            'regionId': region_id,
+                            'activationLevel': round(min(1.0, activation), 3),
+                            'name_cn': name_cn,
+                            'name_en': name_en
+                        })
+                        
+                        region_values.append({
+                            'regionId': region_id,
+                            'name': name_cn,
+                            'value': round(contribution if isinstance(contribution, (int, float)) else 0, 4)
+                        })
+                    
+                    if region_activations:
+                        data_source = 'database_brain_regions'
 
             except (json.JSONDecodeError, KeyError, TypeError) as e:
                 current_app.logger.warning(f'解析features_used失败: {e}')
 
+        # 优先级2: 如果数据库中没有,尝试从 MRI 文件实时提取
+        if not region_activations and analysis.mri_scan_id:
+            current_app.logger.info(f'数据库中无脑区数据,尝试从MRI文件提取: scan_id={analysis.mri_scan_id}')
+            real_data = get_real_brain_data(analysis.mri_scan_id, analysis.prediction)
+            
+            if real_data:
+                region_activations, region_values = real_data
+                data_source = 'real_time_extraction'
+                current_app.logger.info('成功从MRI文件提取真实脑区数据')
+
+        # 优先级3: 降级到模拟数据
         if not region_activations:
+            current_app.logger.warning(f'无法获取真实数据,使用模拟数据: analysis_id={analysis_id}')
             region_activations, region_values = generate_mock_brain_data(analysis.prediction)
+            data_source = 'mock_data'
 
         return jsonify({
             'success': True,
             'region_activations': region_activations,
             'region_values': region_values,
             'prediction': analysis.prediction,
-            'confidence': analysis.confidence
+            'confidence': analysis.confidence,
+            'data_source': data_source  # 添加数据来源标识,便于调试
         })
 
     except Exception as e:
@@ -473,23 +694,128 @@ def get_analysis_brain_data(analysis_id):
         }), 500
 
 
-def generate_mock_brain_data(prediction):
-    """生成模拟的脑区激活数据（用于演示）"""
-    import random
+def get_real_brain_data(mri_scan_id, prediction=None):
+    """
+    从真实的MRI扫描中提取脑区数据
+    
+    Args:
+        mri_scan_id: MRI扫描ID
+        prediction: 预测结果(可选,用于计算激活度)
+    
+    Returns:
+        tuple: (region_activations, region_values) 或 None
+    """
+    try:
+        import nibabel as nib
+        import numpy as np
+        from ml_core.prediction_service import ASDPredictionService
+        from app.utils.aal3_region_mapper import aal3_mapper
+        
+        # 1. 获取MRI扫描记录
+        mri_scan = MRIScan.query.get(mri_scan_id)
+        if not mri_scan or not os.path.exists(mri_scan.file_path):
+            current_app.logger.warning(f'MRI文件不存在: scan_id={mri_scan_id}')
+            return None
+        
+        # 2. 检查是否有预处理后的文件
+        preprocessed_path = mri_scan.file_path.replace('uploads', 'preprocessed').replace('.nii.gz', '_preprocessed.nii.gz')
+        if not os.path.exists(preprocessed_path):
+            # 尝试原始文件
+            preprocessed_path = mri_scan.file_path
+        
+        if not os.path.exists(preprocessed_path):
+            current_app.logger.warning(f'预处理文件不存在: {preprocessed_path}')
+            return None
+        
+        # 3. 使用预测服务提取脑区特征
+        service = ASDPredictionService()
+        service.load_brain_mask()  # 加载AAL3模板
+        
+        # 提取各脑区的统计信息
+        region_stats = service._extract_region_values(preprocessed_path)
+        
+        if not region_stats:
+            current_app.logger.warning('无法提取脑区统计信息')
+            return None
+        
+        # 4. 构建返回数据
+        region_activations = []
+        region_values = []
+        
+        # 获取脑区ID映射
+        for region_name, stats in region_stats.items():
+            # 尝试从AAL3映射器获取脑区ID
+            region_id = None
+            name_cn = region_name
+            name_en = region_name
+            
+            # 反向查找脑区ID
+            for rid, names in aal3_mapper.region_names.items():
+                if names.get('en') == region_name or names.get('cn') == region_name:
+                    region_id = rid
+                    name_en = names.get('en', region_name)
+                    name_cn = names.get('cn', region_name)
+                    break
+            
+            if region_id is None:
+                # 如果找不到映射,跳过或使用默认ID
+                continue
+            
+            # 计算激活度(基于灰质体积的相对值)
+            mean_volume = stats.get('mean', 0)
+            volume_count = stats.get('volume', 0)
+            
+            # 归一化激活度到 [0, 1] 范围
+            # 使用简化的归一化:假设典型灰质体积范围为 [500, 1500]
+            activation = max(0.0, min(1.0, (mean_volume - 500) / 1000))
+            
+            region_activations.append({
+                'regionId': region_id,
+                'activationLevel': round(activation, 3),
+                'name_cn': name_cn,
+                'name_en': name_en
+            })
+            
+            region_values.append({
+                'regionId': region_id,
+                'name': name_cn,
+                'value': round(mean_volume, 4),
+                'volume': volume_count,
+                'median': round(stats.get('median', 0), 4),
+                'std': round(stats.get('std', 0), 4)
+            })
+        
+        current_app.logger.info(f'成功提取 {len(region_activations)} 个脑区的真实数据')
+        return region_activations, region_values
+        
+    except Exception as e:
+        current_app.logger.error(f'提取真实脑区数据失败: {e}', exc_info=True)
+        return None
 
+
+def generate_mock_brain_data(prediction):
+    """
+    生成模拟的脑区激活数据（仅用于演示或数据缺失时的降级方案）
+    
+    Note: 此函数应仅在无法获取真实MRI数据时使用
+    """
+    import random
+    from app.utils.aal3_region_mapper import aal3_mapper
+
+    # ASD相关的关键脑区
     asd_related_regions = [
         (1, "Precentral_L", "中央前回_左"),
-        (2, "Frontal_Sup_L", "额上回_左"),
-        (6, "Precentral_R", "中央前回_右"),
-        (7, "Frontal_Sup_R", "额上回_右"),
+        (2, "Precentral_R", "中央前回_右"),
+        (3, "Frontal_Sup_L", "额上回_左"),
+        (4, "Frontal_Sup_R", "额上回_右"),
         (19, "Temporal_Sup_L", "颞上回_左"),
         (20, "Temporal_Mid_L", "颞中回_左"),
         (22, "Hippocampus_L", "海马_左"),
         (23, "Temporal_Sup_R", "颞上回_右"),
         (24, "Temporal_Mid_R", "颞中回_右"),
         (26, "Hippocampus_R", "海马_右"),
-        (33, "Cingulum_Ant_L", "扣带回前部_左"),
-        (35, "Cingulum_Ant_R", "扣带回前部_右"),
+        (33, "Cingulate_Ant_L", "扣带回前部_左"),
+        (35, "Cingulate_Ant_R", "扣带回前部_右"),
         (37, "Caudate_L", "尾状核_左"),
         (40, "Caudate_R", "尾状核_右"),
         (43, "Thalamus_L", "丘脑_左"),
@@ -509,7 +835,9 @@ def generate_mock_brain_data(prediction):
 
         region_activations.append({
             'regionId': region_id,
-            'activationLevel': round(activation, 3)
+            'activationLevel': round(activation, 3),
+            'name_cn': name_cn,
+            'name_en': name_en
         })
 
         region_values.append({
@@ -521,13 +849,286 @@ def generate_mock_brain_data(prediction):
     return region_activations, region_values
 
 
-# ========== 注意：以下预处理相关API端点已移除 ==========
-# 原因：预处理功能已集成到分析任务流水线中（tasks/analysis_tasks.py）
-# 迁移指南：
-#   - 如需执行预处理，请使用 submit_analysis_task() 并设置 use_preprocessing=True
-#   - 质量控制报告可在 AnalysisResult.features_used 中查看 preprocess_info 字段
-#   - 掩膜文件位于 ml_core/data/Mask/ROI/ 目录，直接使用即可
-# ========================================================
+# ========== 新增：MRI预处理相关API ==========
+
+@api_bp.route('/mri-scans/<int:mri_scan_id>')
+@login_required
+def get_mri_scan(mri_scan_id):
+    """
+    获取MRI扫描详情
+    
+    Args:
+        mri_scan_id: MRI扫描ID
+    
+    Returns:
+        JSON: MRI扫描信息，包含file_path
+    """
+    try:
+        mri_scan = MRIScan.query.get_or_404(mri_scan_id)
+        
+        # 权限检查
+        patient = Patient.query.get(mri_scan.patient_id)
+        if not check_patient_permission(patient):
+            return jsonify({'error': '没有权限'}), 403
+        
+        return jsonify({
+            'id': mri_scan.id,
+            'patient_id': mri_scan.patient_id,
+            'original_filename': mri_scan.original_filename,
+            'file_path': mri_scan.file_path,
+            'scan_type': mri_scan.scan_type,
+            'scan_date': mri_scan.scan_date.isoformat() if mri_scan.scan_date else None,
+            'file_size': mri_scan.file_size,
+            'notes': mri_scan.notes
+        })
+    except Exception as e:
+        current_app.logger.error(f'获取MRI扫描信息失败: {e}', exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@api_bp.route('/files/nifti', methods=['GET'])
+@login_required
+def serve_nifti_file():
+    """
+    提供NIfTI文件访问（用于Papaya查看器）
+    
+    Query Parameters:
+        path: NIfTI文件的绝对路径或相对路径
+    
+    Returns:
+        File response: NIfTI文件流
+    """
+    from flask import send_file
+    import mimetypes
+    
+    try:
+        file_path = request.args.get('path')
+        
+        if not file_path:
+            return jsonify({'error': '缺少path参数'}), 400
+        
+        # 安全检查：确保路径在允许的数据目录内
+        base_dirs = [
+            os.path.join(current_app.root_path, '..', 'data'),
+            os.path.abspath(os.path.join(current_app.root_path, '..', 'data'))
+        ]
+        
+        abs_path = os.path.abspath(file_path)
+        
+        # 验证路径合法性
+        is_allowed = any(abs_path.startswith(base_dir) for base_dir in base_dirs)
+        
+        if not is_allowed:
+            current_app.logger.warning(f'非法文件访问尝试: {file_path}')
+            return jsonify({'error': '无权访问该文件'}), 403
+        
+        if not os.path.exists(abs_path):
+            return jsonify({'error': f'文件不存在: {abs_path}'}), 404
+        
+        # 设置正确的MIME类型
+        mime_type = 'application/octet-stream'
+        if file_path.endswith('.nii.gz'):
+            mime_type = 'application/gzip'
+        elif file_path.endswith('.nii'):
+            mime_type = 'application/octet-stream'
+        
+        # 发送文件
+        return send_file(
+            abs_path,
+            mimetype=mime_type,
+            as_attachment=False,
+            download_name=os.path.basename(file_path)
+        )
+        
+    except Exception as e:
+        current_app.logger.error(f'提供NIfTI文件失败: {e}', exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@api_bp.route('/preprocessing/execute', methods=['POST'])
+@login_required
+def execute_preprocessing():
+    """
+    执行独立的MRI预处理任务
+    
+    Request Body:
+    {
+        "mri_scan_id": 123,
+        "config_preset": "standard",  // 可选: standard/high_res/minimal/custom
+        "custom_config": {            // 当config_preset=custom时使用
+            "target_resolution": [2, 2, 2],
+            "smoothing_fwhm": 8.0,
+            "intensity_normalization": true
+        },
+        "save_intermediate": false
+    }
+    
+    Returns:
+        JSON: {
+            "success": true,
+            "task_id": "task_xxx",
+            "message": "预处理任务已提交"
+        }
+    """
+    try:
+        from tasks.task_manager import task_manager
+        
+        data = request.get_json()
+        mri_scan_id = data.get('mri_scan_id')
+        config_preset = data.get('config_preset', 'standard')
+        custom_config = data.get('custom_config', {})
+        save_intermediate = data.get('save_intermediate', False)
+        
+        if not mri_scan_id:
+            return jsonify({
+                'success': False,
+                'error': '缺少必要参数: mri_scan_id'
+            }), 400
+        
+        # 获取MRI扫描记录
+        mri_scan = MRIScan.query.get_or_404(mri_scan_id)
+        
+        # 验证文件是否存在
+        if not os.path.exists(mri_scan.file_path):
+            return jsonify({
+                'success': False,
+                'error': f'MRI 文件不存在: {mri_scan.file_path}'
+            }), 404
+        
+        # 获取患者信息
+        patient = Patient.query.get_or_404(mri_scan.patient_id)
+        
+        # 构建预处理配置
+        if config_preset == 'custom' and custom_config:
+            preprocess_config = custom_config
+        else:
+            from ml_core.prepare_data_wrapper import get_preprocessing_config_presets
+            presets = get_preprocessing_config_presets()
+            preprocess_config = presets.get(config_preset, presets['standard'])
+        
+        # 提交预处理任务
+        task_id = task_manager.submit_preprocessing_task(
+            mri_scan_id=mri_scan_id,
+            patient_id=patient.id,
+            user_id=current_user.id,
+            config=preprocess_config,
+            save_intermediate=save_intermediate
+        )
+        
+        return jsonify({
+            'success': True,
+            'task_id': task_id,
+            'message': '预处理任务已提交，请在任务列表查看进度'
+        })
+    
+    except Exception as e:
+        current_app.logger.error(f'提交预处理任务失败: {e}', exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@api_bp.route('/preprocessing/config-presets', methods=['GET'])
+@login_required
+def get_preprocessing_presets():
+    """
+    获取预定义的预处理配置模板
+    
+    Returns:
+        JSON: {
+            "success": true,
+            "presets": {
+                "standard": {...},
+                "high_res": {...},
+                "minimal": {...}
+            }
+        }
+    """
+    try:
+        from ml_core.prepare_data_wrapper import get_preprocessing_config_presets
+        presets = get_preprocessing_config_presets()
+        
+        return jsonify({
+            'success': True,
+            'presets': presets
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@api_bp.route('/preprocessing/qc-report/<int:mri_scan_id>', methods=['GET'])
+@login_required
+def get_qc_report(mri_scan_id):
+    """
+    获取MRI扫描的质量控制报告
+    
+    Args:
+        mri_scan_id: MRI扫描ID
+    
+    Returns:
+        JSON: {
+            "success": true,
+            "qc_report": {
+                "overall_pass": true,
+                "checks": {...},
+                "warnings": []
+            }
+        }
+    """
+    try:
+        mri_scan = MRIScan.query.get_or_404(mri_scan_id)
+        
+        # 检查是否有预处理后的文件
+        from app.models import AnalysisTask
+        task = AnalysisTask.query.filter_by(
+            mri_scan_id=mri_scan_id
+        ).filter(
+            AnalysisTask.preprocess_info.isnot(None)
+        ).order_by(AnalysisTask.created_at.desc()).first()
+        
+        if not task or not task.preprocess_info:
+            return jsonify({
+                'success': False,
+                'error': '未找到该MRI扫描的质量控制报告，请先执行预处理'
+            }), 404
+        
+        # 如果QC检查通过，返回详细信息
+        qc_info = task.preprocess_info
+        
+        return jsonify({
+            'success': True,
+            'qc_report': {
+                'mri_scan_id': mri_scan_id,
+                'filename': mri_scan.original_filename,
+                'qc_passed': qc_info.get('qc_passed', False),
+                'snr': qc_info.get('snr', None),
+                'brain_volume_voxels': qc_info.get('brain_volume_voxels', None),
+                'steps_completed': qc_info.get('steps_completed', []),
+                'status': qc_info.get('status', 'unknown'),
+                'error': qc_info.get('error', None)
+            }
+        })
+    
+    except Exception as e:
+        current_app.logger.error(f'获取QC报告失败: {e}', exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+# ========== 注意：旧版预处理API注释已移除 ==========
+# 新版API已整合到上方，支持独立预处理和完整分析流程
 
 
 @api_bp.route('/storage/dedup-report', methods=['GET'])
@@ -664,8 +1265,8 @@ def predict_with_selected_model():
         service = ASDPredictionService()
         service.select_model(model_id)
 
-        # 4. 执行预测
-        result = service.predict_from_mri(mri_scan.file_path)
+        # 4. 执行预测（获取完整的脑区数据）
+        result = service.predict_from_mri_file(mri_scan.file_path)
 
         # 5. 保存结果到数据库
         analysis_result = AnalysisResult(
@@ -676,7 +1277,9 @@ def predict_with_selected_model():
             confidence=result['confidence'],
             model_version=model_id,
             features_used=json.dumps({
-                'brain_regions': result['brain_region_contributions'],
+                'brain_regions': result.get('brain_region_contributions', {}),
+                'region_values': result.get('region_values', {}),
+                'feature_names': result.get('feature_names', []),
                 'model_type': model_id
             }),
             analyzed_by=current_user.id

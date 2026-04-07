@@ -14,7 +14,7 @@ import nibabel as nib
 from nilearn import surface
 
 
-def generate_brain_mesh(nifti_path, output_path, threshold=0.5):
+def generate_brain_mesh(nifti_path, output_path, threshold=0.5, activation_data=None):
     """
     从NIfTI文件生成3D脑部网格
     
@@ -22,6 +22,7 @@ def generate_brain_mesh(nifti_path, output_path, threshold=0.5):
         nifti_path: NIfTI文件路径 (.nii 或 .nii.gz)
         output_path: 输出JSON文件路径
         threshold: 二值化阈值 (0-1)
+        activation_data: 可选的脑区激活数据字典 {region_id: activation_level}
     
     Returns:
         str: 生成的JSON文件路径，失败返回None
@@ -94,6 +95,11 @@ def generate_brain_mesh(nifti_path, output_path, threshold=0.5):
             'left_hemisphere': left_hemi,
             'right_hemisphere': right_hemi
         }
+        
+        # 添加脑区激活数据（如果提供）
+        if activation_data:
+            mesh_data['region_activations'] = activation_data
+            print(f"🎨 包含 {len(activation_data)} 个脑区激活数据")
         
         # 保存为JSON
         os.makedirs(os.path.dirname(output_path), exist_ok=True)

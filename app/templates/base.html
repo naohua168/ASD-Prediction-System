@@ -43,7 +43,7 @@
                         <li class="nav-item"><a class="nav-link {% if request.endpoint == 'main.index' %}active{% endif %}" href="{{ url_for('main.index') }}"><i class="fas fa-tachometer-alt me-2"></i>仪表盘</a></li>
                         <li class="nav-item"><a class="nav-link {% if request.endpoint == 'main.patients' %}active{% endif %}" href="{{ url_for('main.patients') }}"><i class="fas fa-users me-2"></i>患者管理</a></li>
                         <li class="nav-item"><a class="nav-link {% if request.endpoint == 'main.upload_mri_general' %}active{% endif %}" href="{{ url_for('main.upload_mri_general') }}"><i class="fas fa-upload me-2"></i>MRI上传</a></li>
-                        <li class="nav-item"><a class="nav-link {% if request.endpoint == 'main.analysis_tasks' %}active{% endif %}" href="{{ url_for('main.analysis_tasks') }}"><i class="fas fa-tasks me-2"></i>分析任务</a></li>
+                        <li class="nav-item"><a class="nav-link {% if request.endpoint == 'main.analysis_tasks_page' %}active{% endif %}" href="{{ url_for('main.analysis_tasks_page') }}"><i class="fas fa-tasks me-2"></i>分析任务</a></li>
                     </ul>
                 </div>
             </nav>

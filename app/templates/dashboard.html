@@ -254,10 +254,18 @@
 <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    // 初始化3D脑部可视化
+    const container = document.getElementById('brainContainer');
     window.brainViz = new BrainVisualizer('brainContainer', {
-        width: document.getElementById('brainContainer').clientWidth,
-        height: 500
+        width: container.clientWidth || 800,
+        height: 500,
+        enableRotation: true,
+        enableZoom: true,
+        autoRotateSpeed: 0.5
     });
+
+    // 尝试加载最近分析的脑部数据(如果有)
+    loadLatestBrainData();
 
     window.medicalCharts = new MedicalCharts();
     loadROCData();
@@ -269,6 +277,59 @@ document.addEventListener('DOMContentLoaded', function() {
     // 每5分钟自动刷新存储统计
     setInterval(loadStorageStats, 5 * 60 * 1000);
 });
+
+// 加载最新分析的脑部数据
+async function loadLatestBrainData() {
+    try {
+        // 获取最近的分析结果
+        const response = await fetch('/api/analysis/tasks?limit=1');
+        const data = await response.json();
+        
+        if (data.tasks && data.tasks.length > 0) {
+            const latestTask = data.tasks[0];
+            if (latestTask.status === 'completed' && latestTask.result_id) {
+                console.log('加载最新分析结果的脑部数据:', latestTask.result_id);
+                
+                // 加载网格数据
+                const meshResponse = await fetch(`/api/analysis/${latestTask.result_id}/brain-mesh`);
+                const meshData = await meshResponse.json();
+                
+                if (meshData.success && meshData.mesh_data) {
+                    brainViz.createBrainMesh(meshData.mesh_data);
+                    
+                    // 应用预测颜色
+                    if (meshData.prediction && meshData.confidence) {
+                        brainViz.applyPredictionColors(meshData.prediction, meshData.confidence);
+                    }
+                    
+                    // 更新关键发现文本
+                    updateKeyFindings(latestTask);
+                }
+            } else {
+                // 没有完成的分析,显示默认提示
+                document.getElementById('keyFindings').textContent = 
+                    '暂无分析数据,请上传MRI并执行分析';
+            }
+        } else {
+            document.getElementById('keyFindings').textContent = 
+                '暂无分析数据,请上传MRI并执行分析';
+        }
+    } catch (error) {
+        console.error('加载脑部数据失败:', error);
+        document.getElementById('keyFindings').textContent = 
+            '加载失败,请刷新页面重试';
+    }
+}
+
+// 更新关键发现文本
+function updateKeyFindings(task) {
+    const prediction = task.prediction || '未知';
+    const confidence = task.confidence ? (task.confidence * 100).toFixed(1) : '0';
+    const text = prediction === 'ASD' 
+        ? `检测到ASD相关生物标志物 (置信度: ${confidence}%)`
+        : `未检测到明显ASD生物标志物 (置信度: ${confidence}%)`;
+    document.getElementById('keyFindings').textContent = text;
+}
 
 async function loadScatterData() {
     try {
